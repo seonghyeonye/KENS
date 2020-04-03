@@ -96,7 +96,7 @@ int TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int domain, int typ
 	if(domain!=PF_INET||type!=SOCK_STREAM)
 		return -1;
 	int fd=SystemCallInterface::createFileDescriptor(pid);
-	addrfdlist.insert(std::pair<int,std::string>(fd,"-1"));
+	addrfdlist.insert(std::pair<int, SockContext>(fd,SockContext()));
 	return fd;
 
 }
@@ -109,36 +109,32 @@ int TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
 
 int TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen){
 	const struct sockaddr_in *addr_int = (const struct sockaddr_in *)addr;
-	unsigned short int port= ntohs(addr_int->sin_port);
-	uint32_t hostaddr=(addr_int->sin_addr).s_addr;
-	std::string ipaddr = std::to_string(hostaddr);
-	std::string portnum = std::to_string(port);
-	std::string pairval = ipaddr+":"+portnum;
+	unsigned short int portnum= ntohs(addr_int->sin_port);
+	uint32_t ipaddr=(addr_int->sin_addr).s_addr;
 	//std::cout<<"port original is "<<addr_int->sin_port<<std::endl;
 	//std::cout<<"address and port is "<<pairval<<std::endl;
 	auto it=addrfdlist.begin();
 
 	while(it!=addrfdlist.end()){
 		int fdcmp = it->first;
-		std::string addrcmp = it->second;
-		int delipos = addrcmp.find(":");
-		std::string ipcmp = addrcmp.substr(0,delipos);
-		std::string portcmp = addrcmp.substr(delipos+1);
-
+		int ipcmp = it->second.desIP;
+		int portcmp = it->second.desPort;
 		//std::cout<<"ipcmp is "<<ipcmp<<std::endl;
 		//std::cout<<"portcmp is "<<portcmp<<std::endl;
-		if(!portnum.compare(portcmp)){
-			if(!ipaddr.compare(ipcmp))
+		if(portnum==portcmp){
+			if(ipaddr==ipcmp)
 				return -1;
-			else if(hostaddr==INADDR_ANY||std::stoi(ipcmp)==INADDR_ANY)
+			else if(ipaddr==INADDR_ANY||ipcmp==INADDR_ANY)
 				return -1;
 		}
 		else if(sockfd==fdcmp){
-			if(ipcmp.compare("-1")!=0){
+			if(ipcmp!=-1){
 				return -1;
 			}
 			else{
-				addrfdlist.find(sockfd)->second=pairval;
+				auto entry= addrfdlist.find(sockfd);
+				entry->second.desIP=ipaddr;
+				entry->second.desPort=portnum;
 			}
 		}
 			
@@ -148,14 +144,13 @@ int TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int sockfd, struct so
 }
 
 int TCPAssignment::syscall_getsockname(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen){
-	std::string addrinfo = addrfdlist.find(sockfd)->second;
+	auto entry= addrfdlist.find(sockfd);
 
-	if(addrinfo.compare("-1")==0)
-		return -1;
+	// if(addrinfo.compare("-1")==0)
+	// 	return -1;
 
-	int delipos=addrinfo.find(":");
-	uint32_t ipaddr = stoi(addrinfo.substr(0,delipos));
-	unsigned short int portnum = stoi(addrinfo.substr(delipos+1));
+	uint32_t ipaddr= entry->second.desIP;
+	unsigned short int portnum = entry->second.desPort;
 	struct sockaddr_in *ret=(struct sockaddr_in *)addr;	
 
 	memset(ret,0,sizeof(ret));

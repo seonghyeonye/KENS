@@ -24,10 +24,23 @@
 namespace E
 {
 
+class SockContext 
+{
+public:
+	int state;
+	int seq;
+	int srcIP, srcPort, desIP,desPort;
+
+public:
+	SockContext(){
+		desIP=-1;
+		desPort=-1;
+	}
+};
 class TCPAssignment : public HostModule, public NetworkModule, public SystemCallInterface, private NetworkLog, private TimerModule
 {
 private:
-	std::map<int, std::string> addrfdlist;
+	std::map<int, SockContext> addrfdlist;
 private:
 	virtual void timerCallback(void* payload) final;
 
