@@ -28,7 +28,10 @@ class SockContext
 {
 public:
 	int state;
+	bool synbit;
+	bool ackbit;
 	int seq;
+	int acknum;
 	int srcIP, srcPort, desIP,desPort;
 
 public:
@@ -37,10 +40,50 @@ public:
 		desPort=-1;
 	}
 };
+
+class Header
+{
+public: 
+	uint16_t srcPort;
+	uint16_t desPort;
+	uint32_t seqnum;
+	uint32_t acknum;
+	uint8_t len;
+	uint8_t flags;
+	uint16_t window;
+	uint16_t checksum;
+	uint16_t urg_ptr;
+
+public:
+	Header(){
+		len=20;
+		flags=0;
+	}
+};
+
 class TCPAssignment : public HostModule, public NetworkModule, public SystemCallInterface, private NetworkLog, private TimerModule
 {
 private:
 	std::map<int, SockContext> addrfdlist;
+	
+	#define CLOSED 0
+	#define LISTENS 1
+	#define SYNSENT 2
+	#define SYNRCVD 3
+	#define ESTAB 4
+	#define FIN_WAIT1 5
+	#define FIN_WAIT2 6
+	#define CLOSE_WAIT 7
+	#define TIMED_WAIT 8
+	#define LAST_ACK 9
+
+	#define URG 0x100000
+	#define ACK 0x10000
+	#define PSH 0x1000
+	#define RST 0x100
+	#define SYN 0x10
+	#define FIN 0x1
+
 private:
 	virtual void timerCallback(void* payload) final;
 
@@ -54,6 +97,7 @@ public:
 	int syscall_close(UUID syscallUUID, int pid, int fd);
 	int syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *my_addr, socklen_t addrlen); 
 	int syscall_getsockname(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+	int syscall_connect(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen);
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
 	virtual void packetArrived(std::string fromModule, Packet* packet) final;
