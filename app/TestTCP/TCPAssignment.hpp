@@ -33,11 +33,12 @@ public:
 	int seq;
 	int acknum;
 	int srcIP, srcPort, desIP,desPort;
+	UUID syscallID;
 
 public:
 	SockContext(){
-		desIP=-1;
-		desPort=-1;
+		srcIP=-1;
+		srcPort=-1;
 	}
 };
 
@@ -56,8 +57,8 @@ public:
 
 public:
 	Header(){
-		len=20;
 		flags=0;
+		window=htons(51200);
 	}
 };
 
@@ -77,12 +78,12 @@ private:
 	#define TIMED_WAIT 8
 	#define LAST_ACK 9
 
-	#define URG 0x100000
-	#define ACK 0x10000
-	#define PSH 0x1000
-	#define RST 0x100
-	#define SYN 0x10
-	#define FIN 0x1
+	#define URG 32
+	#define ACK 16
+	#define PSH 8
+	#define RST 4
+	#define SYN 2
+	#define FIN 1
 
 private:
 	virtual void timerCallback(void* payload) final;
@@ -93,11 +94,15 @@ public:
 	virtual void finalize();
 	virtual ~TCPAssignment();
 
-	int syscall_socket(UUID syscallUUID, int pid, int type, int protocol);
-	int syscall_close(UUID syscallUUID, int pid, int fd);
-	int syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *my_addr, socklen_t addrlen); 
-	int syscall_getsockname(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
-	int syscall_connect(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen);
+	void syscall_socket(UUID syscallUUID, int pid, int type, int protocol);
+	void syscall_close(UUID syscallUUID, int pid, int fd);
+	void syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *my_addr, socklen_t addrlen); 
+	void syscall_getsockname(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+	void syscall_connect(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen);
+	void syscall_getpeername(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+	void syscall_listen(UUID syscallUUID, int pid, int sockfd, int backlog);
+	void syscall_accept(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
 	virtual void packetArrived(std::string fromModule, Packet* packet) final;
