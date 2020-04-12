@@ -19,7 +19,6 @@
 
 #include <E/E_TimerModule.hpp>
 
-#include <map>
 
 namespace E
 {
@@ -28,19 +27,39 @@ class SockContext
 {
 public:
 	int state;
-	bool synbit;
-	bool ackbit;
-	int seq;
-	int acknum;
+	// int synnum;
+	// bool ackbit;
+	//int seq;
+	//int acknum;
 	int srcIP, srcPort, desIP,desPort;
 	UUID syscallID;
+	int backlog;
+	struct sockaddr *addrinfo;
+	//int dupsockfd;
+	int pid;
+	std::list<int> dupsocklist;
+	std::list<int> backloglist;
 
 public:
 	SockContext(){
 		srcIP=-1;
 		srcPort=-1;
+		syscallID=-1;
+		pid=-1;
 	}
 };
+
+// class PIDEntry
+// {
+// public:
+// 	int pid;
+// 	std::map<int, SockContext> addrfdlist;
+// public:
+// 	PIDEntry(){
+// 		pid=-1;
+// 	}
+// 	PIDEntry(int pid);
+// };
 
 class Header
 {
@@ -65,8 +84,7 @@ public:
 class TCPAssignment : public HostModule, public NetworkModule, public SystemCallInterface, private NetworkLog, private TimerModule
 {
 private:
-	std::map<int, SockContext> addrfdlist;
-	
+	std::multimap<int, SockContext> addrfdlist;
 	#define CLOSED 0
 	#define LISTENS 1
 	#define SYNSENT 2
@@ -94,6 +112,7 @@ public:
 	virtual void finalize();
 	virtual ~TCPAssignment();
 
+	std::multimap<int, SockContext>::iterator mapfindbypid(int pid, int fd);
 	void syscall_socket(UUID syscallUUID, int pid, int type, int protocol);
 	void syscall_close(UUID syscallUUID, int pid, int fd);
 	void syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *my_addr, socklen_t addrlen); 
