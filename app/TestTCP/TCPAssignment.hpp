@@ -49,18 +49,6 @@ public:
 	}
 };
 
-// class PIDEntry
-// {
-// public:
-// 	int pid;
-// 	std::map<int, SockContext> addrfdlist;
-// public:
-// 	PIDEntry(){
-// 		pid=-1;
-// 	}
-// 	PIDEntry(int pid);
-// };
-
 class Header
 {
 public: 
