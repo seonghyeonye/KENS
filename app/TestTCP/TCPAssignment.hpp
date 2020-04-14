@@ -27,15 +27,10 @@ class SockContext
 {
 public:
 	int state;
-	// int synnum;
-	// bool ackbit;
-	//int seq;
-	//int acknum;
 	int srcIP, srcPort, desIP,desPort;
 	UUID syscallID;
 	int backlog;
 	struct sockaddr *addrinfo;
-	//int dupsockfd;
 	int pid;
 	std::list<int> dupsocklist;
 	std::list<int> backloglist;

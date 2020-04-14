@@ -100,7 +100,7 @@ std::map<int, SockContext>::iterator TCPAssignment::mapfindbypid(int pid, int fd
 		}		
 		it++;
 	}
-	printf("not found!\n");
+	//return;
 }
 
 void TCPAssignment::syscall_socket(UUID syscallUUID, int pid, int domain, int type){
@@ -120,7 +120,6 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
 }
 
 void TCPAssignment:: syscall_connect(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen){
-	printf("connect is start\n");
 	const struct sockaddr_in *addr_int = (const struct sockaddr_in *)addr;
 	unsigned short int desPort= ntohs(addr_int->sin_port);
 	uint8_t desIP[4], srcIP[4];
@@ -140,7 +139,7 @@ void TCPAssignment:: syscall_connect(UUID syscallUUID, int pid, int sockfd, stru
 		this->getHost()->getIPAddr(srcIP,tableidx);
 
 		srcIP32=srcIP[0]<<24|srcIP[1]<<16|srcIP[2]<<8|srcIP[3];
-		// Dynamic and/or Private Port : 49152 ~ 65535
+		// Dynamic and/or Private Port : 1024 ~ 65535
 		while(1){
 			int tempport=rand()%64510+1024;
 			auto it=addrfdlist.begin();
@@ -158,11 +157,8 @@ void TCPAssignment:: syscall_connect(UUID syscallUUID, int pid, int sockfd, stru
 		srcIP32=context->srcIP;
 		srcPort=context->srcPort;
 	}
-	printf("srcport is %d\n",srcPort);
 	context->srcIP=srcIP32;
 	context->srcPort=srcPort;
-
-//	entry->second.synbit=1;
 
 	srcIP32=htonl(srcIP32);
 	desIP32=htonl(desIP32);
@@ -190,8 +186,6 @@ void TCPAssignment:: syscall_connect(UUID syscallUUID, int pid, int sockfd, stru
 }
 
 void TCPAssignment::syscall_listen(UUID syscallUUID, int pid, int sockfd, int backlog){
-	printf("pid and fd in listen start is %d %d\n",pid,sockfd);
-
 	SockContext *context= &mapfindbypid(pid,sockfd)->second;
 	//not bound connection
 	if(context->srcIP==-1||context->srcPort==-1){
@@ -204,7 +198,6 @@ void TCPAssignment::syscall_listen(UUID syscallUUID, int pid, int sockfd, int ba
 }
 
 void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen){
-	printf("pid in accept start is %d\n",pid);
 	int dupsockfd;
 	SockContext *sockcontext=&mapfindbypid(pid,sockfd)->second;
 
@@ -225,8 +218,6 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct
 		SockContext *dupcontext= &mapfindbypid(pid,dupsockfd)->second;
 
 		if(dupcontext->state==ESTAB){
-			printf("estabbbbb!!!\n");
-
 			struct sockaddr_in *ret=(struct sockaddr_in *)addr;	
 			memset(ret,0,sizeof(ret));
 		
@@ -243,9 +234,8 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int sockfd, struct s
 	struct sockaddr_in *addr_int = (struct sockaddr_in *)addr;
 	unsigned short int portnum= ntohs(addr_int->sin_port);
 	uint32_t ipaddr=ntohl((addr_int->sin_addr).s_addr);
-	auto it=addrfdlist.begin();
-	printf("bind called by pid %d, sockfd %d\n",pid,sockfd);
 
+	auto it=addrfdlist.begin();
 	while(it!=addrfdlist.end()){
 		int fdcmp = it->first;
 		int ipcmp = it->second.srcIP;
@@ -269,16 +259,11 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int sockfd, struct s
 	SockContext *context= &mapfindbypid(pid,sockfd)->second;
 	context->srcIP=ipaddr;
 	context->srcPort=portnum;
-	//RE? multi interface case
-	//addr_int->sin_addr.s_addr=0;
 	this->returnSystemCall(syscallUUID,0);
 }
 
 void TCPAssignment::syscall_getsockname(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen){
-
 	SockContext *context= &mapfindbypid(pid,sockfd)->second;
-	printf("getsockname pid is %d\n",context->pid);
-
 	// if(addrinfo.compare("-1")==0)
 	// 	return -1;
 
@@ -341,16 +326,13 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	flags = tcpHeader->flags;
 	seqnum=ntohl(tcpHeader->seqnum);
 	acknum=ntohl(tcpHeader->acknum);
-	//checksum=ntohs(tcpHeader->checksum);
 
-	// uint16_t val=NetworkUtil::tcp_sum(srcIP32, desIP32, (uint8_t*)tcpHeader, 20);
+	//uint16_t val=NetworkUtil::tcp_sum(desIP32, srcIP32, (uint8_t*)tcpHeader, 20)));
 	// printf("val of checksum is %d\n",val);
 
 	//client case connect
 	if(flags==SYN+ACK){
-		printf("synack\n");
 		auto it=addrfdlist.begin();
-
 		while(it!=addrfdlist.end()){
 			uint32_t srcIPcmp = it->second.srcIP;
 			uint16_t srcPortcmp = it->second.srcPort;
@@ -366,8 +348,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		}
 
 		if(sockfd==-1){
-			this->returnSystemCall(context->syscallID,-1);
-			printf("error");
+			return;
 		}
 
 		//synnum of client past and acknum of sender -1 has to be equal
@@ -401,13 +382,10 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 	//server incoming client
 	else if(flags==SYN){
-		//printf("synnnnnnnnnn\n");
 		auto it=addrfdlist.begin();
-
 		while(it!=addrfdlist.end()){
 			uint32_t srcIPcmp= it->second.srcIP;
 			uint16_t srcPortcmp = it->second.srcPort;
-			printf("addr is %d\n",srcIPcmp);
 			if(desPort==srcPortcmp){
 				if(desIP32==srcIPcmp||srcIPcmp==0){
 					sockfd=it->first;
@@ -417,38 +395,26 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			}
 			it++;
 		}
-		//synnum of client past and acknum of sender -1 has to be equal
-		//checksum check REEEEEEEEEEEE!
 
-		//SockContext *context = &&mapfindbypid(pid,sockfd)->second->second);
-
-		if(context->state!=LISTENS){
-			printf("????\n");
+		//context has to be listen state (passive open) or synsent (active open)
+		if(context->state!=LISTENS&&context->state!=SYNSENT){
 			return;
 		}
 
-		//int dupsock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		int dupsock=createFileDescriptor(context->pid);
-		printf("dupsock pid is %d\n",context->pid);
-		printf("dupsock in syn is %d\n",dupsock);
 
 		std::list<int> *backloglist= &context->backloglist;
 		std::list<int> *dupsocklist= &context->dupsocklist;
-		printf("sockfd in syn is %d\n",sockfd);
 
 		if(backloglist->size()>=context->backlog)
 			return;
 
 		backloglist->push_back(dupsock);
-		printf("size after push is %d\n",(backloglist)->size());
 		dupsocklist->push_back(dupsock);
 
 		SockContext dupsockcxt= *new SockContext;
 		dupsockcxt.pid=context->pid;
 		addrfdlist.insert(std::pair<int, SockContext>(dupsock,dupsockcxt));
-		
-
-		//context->dupsockfd=dupsock;
 
 		SockContext *dupcontext = &mapfindbypid(context->pid,dupsock)->second;
 		dupcontext->desIP=srcIP32;
@@ -473,7 +439,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		tcpHeader->checksum=0;
 		tcpHeader->checksum= htons(~(NetworkUtil::tcp_sum(desIP32, srcIP32, (uint8_t*)tcpHeader, 20)));
 
-		//printf("srcport client port should be 46218 %d\n",ntohs(tcpHeader->srcPort));
 		myPacket->writeData(30+4, tcpHeader,20);
 
 		//state change
@@ -483,7 +448,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 	//server side after sending synack
 	else if(flags==ACK){
-		printf("ack enter\n");
 		int listensockfd=-1;
 		SockContext * liscontext;
 		auto it=addrfdlist.begin();
@@ -494,7 +458,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			uint16_t srcPortcmp=it->second.srcPort;
 			uint32_t srcIPcmp=it->second.srcIP;
 			int statecmp=it->second.state;
-					printf("srcIPcmp is %d\n",srcIPcmp);
 			if(srcPort==desPortcmp&&srcIP32==desIPcmp){
 				sockfd=it->first;
 				context=&(it->second);
@@ -508,47 +471,30 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			it++;
 		}
 
-		//synnum of client past and acknum of sender -1 has to be equal
-		//checksum check REEEEEEEEEEEE!
+		if(sockfd==-1||listensockfd==-1)
+			return;
 
-		if(sockfd==-1||listensockfd==-1){
-			this->returnSystemCall(liscontext->syscallID,-1);
-		}
+		if(context->state!=SYNRCVD)
+			return;
 
-		if(context->state!=SYNRCVD){
-			printf("synrevd not error!!!\n");
-			this->returnSystemCall(liscontext->syscallID,-1);
-			//return;
-		}
-
-		printf("listsockfd is %d\n",listensockfd);
-		printf("pid is %d\n",liscontext->pid);
 		std::list<int> *backloglist= &liscontext->backloglist;
-		printf("before pop backloglist size is %d\n",backloglist->size());
 		backloglist->pop_front();
-		printf("after pop\n");
 
 		context->state=ESTAB;
-
 		this->freePacket(packet);
 
 		//case when accept was first called
 		if(liscontext->syscallID!=-1){
-			printf("addrinfo\n");
-
 			struct sockaddr_in *ret=(struct sockaddr_in *)(liscontext->addrinfo);	
 			memset(ret,0,sizeof(ret));
 		
-			printf("sockfd in ack is %d\n",sockfd);
-			(ret)->sin_family = AF_INET;
-			(ret)->sin_addr.s_addr=htonl(context->srcIP);
+			ret->sin_family = AF_INET;
+			ret->sin_addr.s_addr=htonl(context->srcIP);
 			srcIP[0]=context->srcIP>>24;
 			srcIP[1]=(u_char)(context->srcIP>>16);
 			srcIP[2]=(u_char)(context->srcIP>>8);
 			srcIP[3]=(u_char)context->srcIP;
-			printf("srcIP in ack is %u.%u.%u.%u\n",srcIP[0],srcIP[1],srcIP[2],srcIP[3]);
-
-			(ret)->sin_port=htons(context->desPort);
+			ret->sin_port=htons(context->desPort);
 
 			std::list<int> *dupsocklist=&(liscontext->dupsocklist);
 			dupsocklist->pop_front();
