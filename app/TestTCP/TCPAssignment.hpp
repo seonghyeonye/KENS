@@ -28,12 +28,14 @@ class SockContext
 public:
 	int state;
 	int srcIP, srcPort, desIP,desPort;
+	int seqnum,acknum;
 	UUID syscallID;
 	int backlog;
 	struct sockaddr *addrinfo;
 	int pid;
 	std::list<int> dupsocklist;
 	std::list<int> backloglist;
+	bool acceptflag;
 
 public:
 	SockContext(){
@@ -41,6 +43,8 @@ public:
 		srcPort=-1;
 		syscallID=-1;
 		pid=-1;
+		seqnum=0;
+		acknum=0;
 	}
 };
 
@@ -68,6 +72,7 @@ class TCPAssignment : public HostModule, public NetworkModule, public SystemCall
 {
 private:
 	std::multimap<int, SockContext> addrfdlist;
+	std::multimap<int, SockContext> closelist;
 	#define CLOSED 0
 	#define LISTENS 1
 	#define SYNSENT 2
@@ -96,6 +101,7 @@ public:
 	virtual ~TCPAssignment();
 
 	std::multimap<int, SockContext>::iterator mapfindbypid(int pid, int fd);
+	void sendTCPPacket(Packet *newPacket,Header *tcpHeader, uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags);
 	void syscall_socket(UUID syscallUUID, int pid, int type, int protocol);
 	void syscall_close(UUID syscallUUID, int pid, int fd);
 	void syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *my_addr, socklen_t addrlen); 
