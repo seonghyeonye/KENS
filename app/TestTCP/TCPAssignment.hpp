@@ -35,17 +35,16 @@ public:
 	int pid;
 	std::list<int> dupsocklist;
 	std::list<int> backloglist;
-	bool clientcloseflag;
 
 public:
 	SockContext(){
 		srcIP=-1;
 		srcPort=-1;
+		desIP=-1;
 		syscallID=-1;
 		pid=-1;
 		seqnum=0;
 		acknum=0;
-		clientcloseflag=0;
 	}
 };
 
@@ -73,7 +72,6 @@ class TCPAssignment : public HostModule, public NetworkModule, public SystemCall
 {
 private:
 	std::multimap<int, SockContext> addrfdlist;
-	std::multimap<int, SockContext> closelist;
 	#define CLOSED 0
 	#define LISTENS 1
 	#define SYNSENT 2
@@ -84,7 +82,6 @@ private:
 	#define CLOSE_WAIT 7
 	#define TIMED_WAIT 8
 	#define LAST_ACK 9
-	#define ESTAB_SERVER 10
 
 	#define URG 32
 	#define ACK 16
