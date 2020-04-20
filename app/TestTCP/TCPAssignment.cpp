@@ -156,13 +156,31 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
 		Header *tcpHeader = new Header();
 		sendTCPPacket(newPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,FIN+ACK);
 
-		context->state=FIN_WAIT1;
 		context->syscallID=syscallUUID;
 
-		//to store context after close
-		closelist.insert(std::pair<int,SockContext>(fd,*context));
+		//passive close
+		if(context->clientcloseflag==1){
+			// if(context->state==ESTAB_SERVER){
+			// 	printf("close wait1\n");
+			// 	context->state=CLOSE_WAIT;
+			// }
+			if(context->state==CLOSE_WAIT){
+				printf("close wait2\n");
+				context->state=LAST_ACK;
+			}
+		}
+		//active close
+		else {
+			printf("state before syscall close is %d\n",context->state);
+			context->state=FIN_WAIT1;
+			//to store context after close
+			closelist.insert(std::pair<int,SockContext>(fd,*context));
+			addrfdlist.erase(mapfindbypid(pid,fd));
+		}
 	}
-	addrfdlist.erase(mapfindbypid(pid,fd));
+	else{
+		addrfdlist.erase(mapfindbypid(pid,fd));
+	}
 	this->removeFileDescriptor(pid,fd);
 	this->returnSystemCall(syscallUUID,0);
 }
@@ -261,7 +279,7 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct
 			ret->sin_family = AF_INET;
 			ret->sin_addr.s_addr=htonl(dupcontext->srcIP);
 			ret->sin_port=htons(dupcontext->srcPort);
-			dupcontext->state=ESTAB;
+			//dupcontext->state=ESTAB;
 			this->returnSystemCall(syscallUUID,dupsockfd);
 		}
 
@@ -391,8 +409,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 		//synnum of client past and acknum of sender -1 has to be equal
 		//checksum check REEEEEEEEEEEE!
-		printf("acknum in synack is %d\n",acknum);
-		printf("seqnum in synack is %d\n",seqnum);
+		//printf("acknum in synack is %d\n",acknum);
+		//printf("seqnum in synack is %d\n",seqnum);
 
 		context->seqnum=acknum;
 		context->acknum=seqnum+1;
@@ -464,7 +482,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 		//state change
 		this->freePacket(packet);	
-		printf("synack sent?\n");
+		//printf("synack sent?\n");
 	}
 
 	
@@ -495,12 +513,12 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			}
 			it++;
 		}
-		printf("listensockfd is %d\n",listensockfd);
-		printf("sockfd is %d\n",sockfd);
+		//printf("listensockfd is %d\n",listensockfd);
+		//printf("sockfd is %d\n",sockfd);
 
 		if(sockfd==-1){
-			//client side after close
-			printf("closed?\n");
+			//active close
+			//printf("closed?\n");
 			auto it=closelist.begin();
 			while(it!=closelist.end()){
 				uint32_t srcIPcmp= it->second.srcIP;
@@ -514,36 +532,38 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				}
 				it++;
 			}
-			printf("close socket number is %d\n",closesockfd);
+			//printf("close socket number is %d\n",closesockfd);
 			if(closesockfd==-1)
 				return;
 
 			if(closecontext->state==FIN_WAIT1){
-				printf("before cases\n");
-				printf("seqnum for before is %d\n",seqnum);
-				printf("acknum for before is %d\n",acknum);
+				// printf("before cases\n");
+				// printf("seqnum for before is %d\n",seqnum);
+				// printf("acknum for before is %d\n",acknum);
 				closecontext->state=FIN_WAIT2;
 				return;
 			}
 
 			if(closecontext->state==TIMED_WAIT){
-				printf("seqnum for after is %d\n",seqnum);
-				printf("acknum for after is %d\n",acknum);
-				printf("after cases\n");
+				// printf("seqnum for after is %d\n",seqnum);
+				// printf("acknum for after is %d\n",acknum);
+				// printf("after cases\n");
 				return;
 			}
-			
 		}
-		printf("state is %d\n",context->state);
-
-		if(listensockfd==-1)
-			return;
-
-		//server side last ack receive ack
+		printf("state in ack is %d\n",context->state);
+		
+		//passive close
 		if(context->state==LAST_ACK){
+			printf("closed server\n");
+			printf("sockfd is %d\n",sockfd);
+			addrfdlist.erase(mapfindbypid(context->pid,sockfd));
 			context->state=CLOSED;
 			return;
 		}
+
+		if(listensockfd==-1)
+			return;
 
 		if(context->state!=SYNRCVD)
 			return;
@@ -553,12 +573,12 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		backloglist->pop_front();
 
 		context->state=ESTAB;
-		printf("fd is right after estab is %d\n",sockfd);
+		//printf("fd is right after estab is %d\n",sockfd);
 		this->freePacket(packet);
 
 		//case when accept was first called
 		if(liscontext->syscallID!=-1){
-			printf("accept before!!!\n");
+			//printf("accept before!!!\n");
 
 			//simultaneous close
 			context->acknum=seqnum;
@@ -584,7 +604,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		SockContext *sockcontext;
 		int resseq, resack;
 		
-		//client case 
+		//active close case
 		auto it=closelist.begin();
 		while(it!=closelist.end()){
 			uint32_t srcIPcmp= it->second.srcIP;
@@ -600,14 +620,14 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		}
 
 		if(closesockfd==-1){
-			//server case
+			//passive close
 			auto it=addrfdlist.begin();
 			while(it!=addrfdlist.end()){
 				uint32_t srcIPcmp= it->second.srcIP;
 				uint16_t srcPortcmp = it->second.srcPort;
 				int statecmp = it->second.state;
 				if(desPort==srcPortcmp){
-					if(desIP32==srcIPcmp||srcIPcmp==0&&(statecmp!=LISTENS)){
+					if((desIP32==srcIPcmp||srcIPcmp==0)&&(statecmp!=LISTENS)){
 						sockfd=it->first;
 						sockcontext=&it->second;
 						break;
@@ -616,28 +636,48 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				it++;
 			}
 
-			if(sockfd==-1||sockcontext->state!=ESTAB)
+			printf("sockfd is %d\n",sockfd);
+			//printf("state is %d\n",sockcontext->state);
+			if(sockfd==-1)
 				return;
+			
+			//addrfdlist.erase(it);
 
 			printf("state is %d\n",sockcontext->state);
 
-			printf("estab\n");
-			sockcontext->seqnum=acknum;
-			sockcontext->acknum=seqnum+1;
+			//printf("estab\n");
+
+			//simultaneous close on server side
+			// if(sockcontext->state==CLOSE_WAIT){
+			// 	sockcontext->seqnum=acknum+1;
+			// 	sockcontext->acknum=seqnum+1;
+			// 	sockcontext->state=LAST_ACK;
+			// }
+			if(sockcontext->state==ESTAB){
+				sockcontext->seqnum=acknum;
+				sockcontext->acknum=seqnum+1;
+				sockcontext->state=CLOSE_WAIT;
+			}
+			else{
+				return;
+			}
+			sockcontext->clientcloseflag=1;
 			resseq=sockcontext->seqnum;
 			resack=sockcontext->acknum;
-			sockcontext->state=CLOSE_WAIT;
 		}
 		//printf("finack!!\n");
 
 		//client side
 		else{
+			//printf("closesockfd is %d\n",closesockfd);
+			//printf("desIP is %d\n",closecontext->srcIP);
 
-			//simulataneous close 
+			//simultaneous close 
 			if(closecontext->state==FIN_WAIT1){
 				closecontext->seqnum=acknum+1;
 				closecontext->acknum=seqnum+1;
 			}
+			//normal case
 			else if(closecontext->state==FIN_WAIT2){
 				closecontext->seqnum=acknum;
 				closecontext->acknum=seqnum+1;
@@ -654,23 +694,26 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			//return;
 
 		//printf("closesockfd is %d\n",closesockfd);
-		printf("seqnum is %d\n",resseq);
-		printf("acknum is %d\n",resack);
+		// printf("seqnum is %d\n",resseq);
+		// printf("acknum is %d\n",resack);
 
 		Packet* myPacket = this->clonePacket(packet);
-		Packet* myPacket2 = this->clonePacket(packet);
+		//Packet* myPacket2 = this->clonePacket(packet);
 
 		desIP32=htonl(desIP32);
 		srcIP32=htonl(srcIP32);
 
 		sendTCPPacket(myPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,resseq,resack,ACK);
+		this->freePacket(packet);
 
 		printf("end of rece finack\n");
 
 		//only for client case - last wait for 2min
 		if(closesockfd!=-1)
 			TimerModule::addTimer(closecontext,TimeUtil::makeTime(120,TimeUtil::SEC));
-		this->freePacket(packet);
+		// else{
+		// 	addrfdlist.erase(it);
+		// }
 	}
 }
 
@@ -682,7 +725,7 @@ void TCPAssignment::timerCallback(void* payload)
 		return;
 	}
 	
-	printf("closecontext pid is %d\n",closecontext->pid);
+	//printf("closecontext pid is %d\n",closecontext->pid);
 
 	int closesockfd=-1;
 

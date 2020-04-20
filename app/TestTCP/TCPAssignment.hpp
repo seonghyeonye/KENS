@@ -35,7 +35,7 @@ public:
 	int pid;
 	std::list<int> dupsocklist;
 	std::list<int> backloglist;
-	bool acceptflag;
+	bool clientcloseflag;
 
 public:
 	SockContext(){
@@ -45,6 +45,7 @@ public:
 		pid=-1;
 		seqnum=0;
 		acknum=0;
+		clientcloseflag=0;
 	}
 };
 
@@ -83,6 +84,7 @@ private:
 	#define CLOSE_WAIT 7
 	#define TIMED_WAIT 8
 	#define LAST_ACK 9
+	#define ESTAB_SERVER 10
 
 	#define URG 32
 	#define ACK 16
