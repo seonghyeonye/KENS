@@ -464,10 +464,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 	
 	else if(flags==ACK){
-		int closesockfd=-1;
 		int listensockfd=-1;
 		SockContext *liscontext;
-		SockContext *closecontext;
 
 		auto it=addrfdlist.begin();
 		
@@ -595,20 +593,23 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 		sendTCPPacket(myPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,resseq,resack,ACK);
 		this->freePacket(packet);
+		
+		if(sockcontext->state!=CLOSE_WAIT)
+			TimerModule::addTimer(sockcontext,TimeUtil::makeTime(120,TimeUtil::SEC));
 	}
 }
 
 void TCPAssignment::timerCallback(void* payload)
 {
-	SockContext *closecontext = (SockContext*)payload;
+	SockContext *context = (SockContext*)payload;
 
-	if(closecontext->state!=TIMED_WAIT){
+	if(context->state!=TIMED_WAIT){
 		return;
 	}
-	int closesockfd=-1;
+	int sockfd=-1;
 
-	uint32_t srcIP32=closecontext->srcIP;
-	uint16_t srcPort=closecontext->srcPort;
+	uint32_t srcIP32=context->srcIP;
+	uint16_t srcPort=context->srcPort;
 
 	auto it=addrfdlist.begin();
 	while(it!=addrfdlist.end()){
@@ -616,20 +617,19 @@ void TCPAssignment::timerCallback(void* payload)
 		uint16_t srcPortcmp = it->second.srcPort;
 		if(srcPort==srcPortcmp){
 			if(srcIP32==srcIPcmp||srcIPcmp==0){
-				closesockfd=it->first;
-				closecontext=&(it->second);
+				sockfd=it->first;
+				context=&(it->second);
 				break;
 			}
 		}
 		it++;
 	}
 
-	if(closesockfd==-1){
-		//printf("error\n");
+	if(sockfd==-1){
 		return;
 	}
 	addrfdlist.erase(it);
-	closecontext->state=CLOSED;
+	context->state=CLOSED;
 }
 
 
