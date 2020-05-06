@@ -23,6 +23,41 @@
 namespace E
 {
 
+class InternalBuffer
+{
+public:
+	uint8_t* buffer;
+	size_t remain;
+	size_t peerremain;
+	int base;
+	int nextseqnum;
+	int recentack;
+
+public:
+	InternalBuffer(){
+		buffer= new u_int8_t[51200];
+		remain=51200;
+		//peerremain=51200;
+		base=0;
+		nextseqnum=0;
+		recentack=1;
+		// *base= buffer[0];
+		// *nextseq=buffer[0];
+	}
+};
+
+class IOBuffer
+{
+public:
+	const void* buffer;
+	size_t count;
+
+public:
+	IOBuffer(){
+		count=-1;
+	}
+};
+
 class SockContext 
 {
 public:
@@ -35,6 +70,8 @@ public:
 	int pid;
 	std::list<int> dupsocklist;
 	std::list<int> backloglist;
+	class InternalBuffer intbuffer;
+	class IOBuffer iobuffer;
 
 public:
 	SockContext(){
@@ -66,6 +103,13 @@ public:
 		flags=0;
 		window=htons(51200);
 	}
+};
+
+class TCPSegment
+{
+public:
+	class Header header;
+	uint8_t* data=new uint8_t[512];
 };
 
 class TCPAssignment : public HostModule, public NetworkModule, public SystemCallInterface, private NetworkLog, private TimerModule
@@ -100,7 +144,8 @@ public:
 	virtual ~TCPAssignment();
 
 	std::multimap<int, SockContext>::iterator mapfindbypid(int pid, int fd);
-	void sendTCPPacket(Packet *newPacket,Header *tcpHeader, uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags);
+	void sendTCPPacket(Packet *newPacket,Header *tcpHeader, uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize);
+	void writeDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count);
 	void syscall_socket(UUID syscallUUID, int pid, int type, int protocol);
 	void syscall_close(UUID syscallUUID, int pid, int fd);
 	void syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *my_addr, socklen_t addrlen); 
@@ -109,6 +154,8 @@ public:
 	void syscall_getpeername(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 	void syscall_listen(UUID syscallUUID, int pid, int sockfd, int backlog);
 	void syscall_accept(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+	void syscall_read(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count);
+	void syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count);
 
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
