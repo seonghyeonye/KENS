@@ -104,7 +104,7 @@ std::map<int, SockContext>::iterator TCPAssignment::mapfindbypid(int pid, int fd
 	//return;
 }
 
-void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, uint32_t desIP32, uint32_t srcIP32, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize){
+void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, uint32_t desIP32, uint32_t srcIP32, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize, int window){
 	packet->writeData(14+12,&srcIP32,4);
 	packet->writeData(14+16,&desIP32,4);
 
@@ -127,6 +127,7 @@ void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, uint32_t des
 	tcpHeader->len=(5<<4);
 	tcpHeader->flags=flags;
 	tcpHeader->urg_ptr=0;
+	tcpHeader->window=htons(window);
 	tcpHeader->checksum=0;
 	
 	uint16_t checksum;
@@ -169,7 +170,7 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
 		Packet* newPacket= this->allocatePacket(54);
 
 		Header *tcpHeader = new Header();
-		sendTCPPacket(newPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,FIN+ACK,NULL,0);
+		sendTCPPacket(newPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,FIN+ACK,NULL,0,51200);
 
 		//passive close
 		if(context->state==CLOSE_WAIT){
@@ -187,6 +188,65 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
 	this->returnSystemCall(syscallUUID,0);
 }
 
+void TCPAssignment::readDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count){
+	//printf("initial user buf is %s\n",buf);
+	//printf("readdatapacket enter\n");
+	//printf("count is %d\n",count);
+	InternalBuffer *intbuffer =&(context->intbuffer);
+	if(intbuffer->remain<=0){
+		printf("full!!!!!!!\n");
+		return;
+	}
+	//printf("nextseqnum is %d\n",intbuffer->nextseqnum);
+	//printf("base is %d\n",intbuffer->base);
+	//printf("remain is %d\n",intbuffer->remain);
+	int base = intbuffer->base;
+	uint32_t desIP32,srcIP32;
+	uint16_t desPort,srcPort;
+	//printf("internal buf is %s\n",intbuffer->buffer+intbuffer->base);
+
+	if(base+count>51200){
+		int limitleft=51200-base;
+		memcpy((void *)buf, intbuffer->buffer+base,limitleft);
+		memcpy((void *)buf+limitleft,intbuffer->buffer,count-limitleft);
+		// for(int i=0;i<count-limitleft;i++){
+		// 	uint8_t* address=intbuffer->buffer+base+i;
+		// 	char entry = intbuffer->buffer[base+i];
+		// 	if(intbuffer->buffer[base+i]==EOF){
+		// 		printf("!!!!!!!\n");
+		// 	}
+		// }
+	}
+	else{
+		// for(int i=0;i<count;i++){
+		// 	uint8_t* address=intbuffer->buffer+base+i;
+		// 	if(intbuffer->buffer[base+i]==EOF){
+		// 		printf("!!!!!!!\n");
+		// 	}
+		// }
+		memcpy((void *)buf,intbuffer->buffer+base,count);
+	}
+	//printf("user buf is %s\n",buf);
+	intbuffer->base+=count;
+	intbuffer->base%=51200;
+	intbuffer->remain+=count;
+
+	memset(intbuffer->buffer+base,0,count);
+	
+	//make the copied part of intbuffer empty
+	
+	// Packet* myPacket=this->allocatePacket(54);
+	// Header *tcpHeader = new Header();
+
+	// desIP32=htonl(context->desIP);
+	// srcIP32=htonl(context->srcIP);
+	// desPort=context->desPort;
+	// srcPort=context->srcPort;
+
+
+	this->returnSystemCall(syscallUUID,count);
+
+}
 void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count){
 	InternalBuffer *intbuffer =&(context->intbuffer);
 	int nextseq = intbuffer->nextseqnum;
@@ -227,7 +287,7 @@ void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, cons
 			desPort=context->desPort;
 			srcPort=context->srcPort;
 
-			sendTCPPacket(myPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,ACK,intbuffer,sendcount);
+			sendTCPPacket(myPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,ACK,intbuffer,sendcount,51200);
 			context->seqnum+=sendcount;
 			tempcount-=sendcount;
 		}
@@ -235,7 +295,20 @@ void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, cons
 }
 
 void TCPAssignment:: syscall_read(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count){
-
+	//printf("read enter\n");
+	SockContext *context = &(mapfindbypid(pid,sockfd)->second);
+	InternalBuffer *intbuffer =&(context->intbuffer);
+	if(intbuffer->remain==51200){
+		printf("empty buffer\n");
+		context->syscallID=syscallUUID;
+		context->iobuffer.buffer=buf;
+		context->iobuffer.count=count;
+		//block
+	}
+	else{
+		printf("not empty\n");
+		readDataPacket(syscallUUID,context,buf,count);
+	}
 }
 
 void TCPAssignment:: syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count){
@@ -284,7 +357,7 @@ void TCPAssignment:: syscall_write(UUID syscallUUID, int pid, int sockfd, const 
 				srcPort=context->srcPort;
 				printf("context->acknum is %d\n",context->acknum);
 
-				sendTCPPacket(myPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,ACK,intbuffer,sendcount);
+				sendTCPPacket(myPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,ACK,intbuffer,sendcount,51200);
 				context->seqnum+=sendcount;
 				tempcount-=sendcount;
 			}
@@ -345,7 +418,7 @@ void TCPAssignment:: syscall_connect(UUID syscallUUID, int pid, int sockfd, stru
 
 	Header *tcpHeader = new Header();
 
-	sendTCPPacket(newPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,SYN,NULL,0);
+	sendTCPPacket(newPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,SYN,NULL,0,51200);
 	context->state=SYNSENT;
 	context->syscallID=syscallUUID;
 
@@ -501,6 +574,12 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	acknum=ntohl(tcpHeader->acknum);
 	window=ntohs(tcpHeader->window);
 
+	// printf("seqnum is packet arrive %d\n",seqnum);
+	// printf("acknum is dd is %d\n",acknum);
+	unsigned short lengths;
+	//packet->readData(16,&lengths,2);
+	//printf("length is %d\n",ntohs(lengths));
+
 	//uint16_t val=NetworkUtil::tcp_sum(desIP32, srcIP32, (uint8_t*)tcpHeader, 20)));
 	// printf("val of checksum is %d\n",val);
 
@@ -537,9 +616,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		desIP32=htonl(desIP32);
 		srcIP32=htonl(srcIP32);
 
-		printf("ack num in synack is %d\n",seqnum+1);
-		printf("seq num to send is %d\n",acknum);
-		sendTCPPacket(myPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,acknum,seqnum+1,ACK,NULL,0);
+		printf("ack num in synack is %x\n",seqnum+1);
+		printf("seq num to send is %x\n",acknum);
+		sendTCPPacket(myPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,acknum,seqnum+1,ACK,NULL,0,51200);
 
 		//state change
 		context->state=ESTAB;
@@ -598,7 +677,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		srcIP32=htonl(srcIP32);
 		
 		printf("acknum to send in syn is %d\n",seqnum+1);
-		sendTCPPacket(myPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,0,seqnum+1,ACK+SYN,NULL,0);
+		sendTCPPacket(myPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,0,seqnum+1,ACK+SYN,NULL,0,51200);
 		this->freePacket(packet);	
 	}
 
@@ -656,14 +735,72 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			if(window!=0){
 				InternalBuffer *intbuffer=&context->intbuffer;
 				IOBuffer *iobuffer=&context->iobuffer;
-				int datasize=acknum-(intbuffer->recentack);
-				//printf("datasize is %d\n",datasize);
-				intbuffer->recentack=acknum;
-				intbuffer->remain+=datasize;
-				intbuffer->base+=datasize;
-				if(iobuffer->count!=-1){
-					writeDataPacket(context->syscallID,context,iobuffer->buffer,iobuffer->count);
+				//read ack
+				if(acknum==1){
+					if(intbuffer->remain<=0){
+						return;
+					}
+					int datasize=packet->getSize()-54;
+					
+					if(datasize+intbuffer->nextseqnum>51200){
+						int limitleft=51200-intbuffer->nextseqnum;
+						packet->readData(54,intbuffer->buffer+intbuffer->nextseqnum,limitleft);
+						packet->readData(54+limitleft,intbuffer->buffer,datasize-limitleft);
+					}
+					else{
+
+						//printf("seqnum is %d\n",seqnum);
+						//printf("nextseqnum is %d\n",intbuffer->nextseqnum);
+						packet->readData(54,intbuffer->buffer+intbuffer->nextseqnum,datasize);
+						//printf("buffer is %s\n",intbuffer->buffer+intbuffer->nextseqnum);
+					//printf("remain initial is %d\n",intbuffer->remain);
+					}
+					intbuffer->remain-=datasize;
+					intbuffer->nextseqnum+=datasize;
+					intbuffer->nextseqnum%=51200;
+					//printf("remain is %d\n",intbuffer->remain);
+					//send ack in read?
+					//sendTCPPacket(myPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,0,seqnum+1,ACK+SYN,NULL,0);
+					//datasize=seqnum-(intbuffer->recentseq);
+					int filled=51200-intbuffer->remain;
+					if(iobuffer->count!=-1){
+						if(filled>=iobuffer->count){
+							//printf("call read\n");
+							readDataPacket(context->syscallID,context,iobuffer->buffer,iobuffer->count);
+						}
+					}
+
+					Packet* newPacket= this->allocatePacket(54);
+					
+					desIP32=htonl(desIP32);
+					srcIP32=htonl(srcIP32);
+
+					//printf("seqnum recv is %d\n",seqnum);
+				//	printf("acknum is %d\n",context->acknum);
+					context->acknum+=datasize;
+					//printf("desport is %d\n",srcPort);
+					Header *tcpHeader= new Header();
+					//printf("acknum to send is %x\n",seqnum+datasize);
+
+					//sendTCPPacket(newPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,acknum,seqnum+datasize,ACK,NULL,0,51200);
+
+					sendTCPPacket(newPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,context->seqnum,context->acknum,ACK,NULL,0,51200);//,intbuffer->remain);
+					this->freePacket(packet);
 					return;
+				}
+				//write ack
+				else{
+					printf("write ack\n");
+					printf("write ack acknum is %d\n",acknum);
+					int datasize=acknum-(intbuffer->recentack);
+					//printf("datasize is %d\n",datasize);
+					intbuffer->recentack=acknum;
+					intbuffer->remain+=datasize;
+					intbuffer->base+=datasize;
+					if(iobuffer->count!=-1){
+						writeDataPacket(context->syscallID,context,iobuffer->buffer,iobuffer->count);
+						return;
+					}
 				}
 			}
 		}
@@ -703,6 +840,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	}
 
 	else if(flags==FIN+ACK){
+		printf("finack enter\n");
 		int sockfd=-1;
 		SockContext *sockcontext;
 		int resseq, resack;
@@ -725,6 +863,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 		if(sockfd==-1)
 			return;
+
+		IOBuffer *iobuffer=&sockcontext->iobuffer;
+		if(iobuffer->count!=-1&&acknum==1){
+			this->returnSystemCall(sockcontext->syscallID,-1);
+		}
 
 		if(sockcontext->state==ESTAB){
 			sockcontext->seqnum=acknum;
@@ -752,7 +895,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		desIP32=htonl(desIP32);
 		srcIP32=htonl(srcIP32);
 
-		sendTCPPacket(myPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,resseq,resack,ACK,NULL,0);
+		sendTCPPacket(myPacket,tcpHeader,srcIP32,desIP32,srcPort,desPort,resseq,resack,ACK,NULL,0,51200);
 		this->freePacket(packet);
 		
 		if(sockcontext->state!=CLOSE_WAIT)

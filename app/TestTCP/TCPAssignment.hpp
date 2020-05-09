@@ -32,6 +32,7 @@ public:
 	int base;
 	int nextseqnum;
 	int recentack;
+	int recentseq;
 
 public:
 	InternalBuffer(){
@@ -41,6 +42,7 @@ public:
 		base=0;
 		nextseqnum=0;
 		recentack=1;
+		recentseq=1;
 		// *base= buffer[0];
 		// *nextseq=buffer[0];
 	}
@@ -144,8 +146,9 @@ public:
 	virtual ~TCPAssignment();
 
 	std::multimap<int, SockContext>::iterator mapfindbypid(int pid, int fd);
-	void sendTCPPacket(Packet *newPacket,Header *tcpHeader, uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize);
+	void sendTCPPacket(Packet *newPacket,Header *tcpHeader, uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize, int window);
 	void writeDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count);
+	void readDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count);
 	void syscall_socket(UUID syscallUUID, int pid, int type, int protocol);
 	void syscall_close(UUID syscallUUID, int pid, int fd);
 	void syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *my_addr, socklen_t addrlen); 
