@@ -32,17 +32,14 @@ public:
 	int base;
 	int nextseqnum;
 	int recentack;
-	int recentseq;
 
 public:
 	InternalBuffer(){
 		buffer= new u_int8_t[51200];
 		remain=51200;
-		//peerremain=51200;
 		base=0;
 		nextseqnum=0;
 		recentack=1;
-		recentseq=1;
 	}
 };
 
@@ -104,13 +101,6 @@ public:
 		window=htons(51200);
 	}
 };
-
-// class TCPSegment
-// {
-// public:
-// 	class Header header;
-// 	uint8_t* data=new uint8_t[512];
-// };
 
 class TCPAssignment : public HostModule, public NetworkModule, public SystemCallInterface, private NetworkLog, private TimerModule
 {

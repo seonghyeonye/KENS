@@ -184,7 +184,6 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
 void TCPAssignment::readDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count){
 	InternalBuffer *intbuffer =&(context->intbuffer);
 	if(intbuffer->remain<=0){
-		printf("full!!!!!!!\n");
 		return;
 	}
 	int base = intbuffer->base;
@@ -269,45 +268,9 @@ void TCPAssignment:: syscall_read(UUID syscallUUID, int pid, int sockfd, const v
 void TCPAssignment:: syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count){
 	SockContext *context = &(mapfindbypid(pid,sockfd)->second);
 	InternalBuffer *intbuffer =&(context->intbuffer);
-	int nextseq = intbuffer->nextseqnum;
-	int tempcount=count;
-	int sendcount;
-	uint32_t desIP32,srcIP32;
-	uint16_t desPort,srcPort;
 	
 	if(intbuffer->remain!=0){
-		if(nextseq+count>51200){
-			int part1count=51200-nextseq;
-			memcpy(intbuffer->buffer+nextseq,buf,part1count);
-			int part2count=count-part1count;
-			intbuffer->nextseqnum=0;
-			memcpy(intbuffer->buffer,buf+part1count,part2count);
-		}
-		else{
-			memcpy(intbuffer->buffer+nextseq,buf,count);
-		}
-		intbuffer->remain-=count;
-		this->returnSystemCall(syscallUUID,count);
-		if(context->intbuffer.peerremain!=0){
-			while(tempcount>0){
-				if(tempcount>=512)
-					sendcount=512;
-				else{
-					sendcount=tempcount;
-				}
-				Packet* myPacket=this->allocatePacket(sendcount+54);
-				Header *tcpHeader = new Header();
-
-				desIP32=htonl(context->desIP);
-				srcIP32=htonl(context->srcIP);
-				desPort=context->desPort;
-				srcPort=context->srcPort;
-
-				sendTCPPacket(myPacket,tcpHeader,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,ACK,intbuffer,sendcount,51200);
-				context->seqnum+=sendcount;
-				tempcount-=sendcount;
-			}
-		}
+		writeDataPacket(syscallUUID,context,buf,count);
 	}
 	else{
 		context->syscallID=syscallUUID;
@@ -499,7 +462,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	uint8_t flags;
 	uint32_t seqnum;
 	uint32_t acknum;
-	uint16_t checksum;
 	uint16_t window;
 	int sockfd=-1;
 	SockContext *context;
@@ -520,8 +482,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	acknum=ntohl(tcpHeader->acknum);
 	window=ntohs(tcpHeader->window);
 
-	//uint16_t val=NetworkUtil::tcp_sum(desIP32, srcIP32, (uint8_t*)tcpHeader, 20)));
-	// printf("val of checksum is %d\n",val);
+	uint8_t *tcpSegment = new uint8_t[packet->getSize()-34];
+	packet->readData(30+4,tcpSegment,packet->getSize()-34);
+
+	uint16_t checksum=(~NetworkUtil::tcp_sum(htonl(srcIP32), htonl(desIP32), tcpSegment, packet->getSize()-34));
+	assert(checksum==0);
 
 	//client case connect
 	if(flags==SYN+ACK){
