@@ -69,6 +69,7 @@ public:
 	std::list<int> backloglist;
 	class InternalBuffer intbuffer;
 	class IOBuffer iobuffer;
+	//UUID timerkey; //disappear
 
 public:
 	SockContext(){
@@ -79,6 +80,7 @@ public:
 		pid=-1;
 		seqnum=0;
 		acknum=0;
+		//timerkey=-1;
 	}
 };
 
@@ -102,10 +104,20 @@ public:
 	}
 };
 
+class Payload
+{
+public:
+	Packet* packet;
+	class SockContext* context; 
+	bool sendPacket;
+	UUID timerkey;
+};
+
 class TCPAssignment : public HostModule, public NetworkModule, public SystemCallInterface, private NetworkLog, private TimerModule
 {
 private:
 	std::multimap<int, SockContext> addrfdlist;
+	std::map<UUID, SockContext> timerlist;
 	#define CLOSED 0
 	#define LISTENS 1
 	#define SYNSENT 2
@@ -134,9 +146,10 @@ public:
 	virtual ~TCPAssignment();
 
 	std::multimap<int, SockContext>::iterator mapfindbypid(int pid, int fd);
-	void sendTCPPacket(Packet *newPacket,Header *tcpHeader, uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize, int window);
+	void sendTCPPacket(Packet *newPacket,Header *tcpHeader, SockContext *context, uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize, int window);
 	void writeDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count);
 	void readDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count);
+	std::map<UUID, SockContext> getTimerbyContext(uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort);
 	void syscall_socket(UUID syscallUUID, int pid, int type, int protocol);
 	void syscall_close(UUID syscallUUID, int pid, int fd);
 	void syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *my_addr, socklen_t addrlen); 
