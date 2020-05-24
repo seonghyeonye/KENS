@@ -104,16 +104,26 @@ std::map<int, SockContext>::iterator TCPAssignment::mapfindbypid(int pid, int fd
 	//return;
 }
 
-void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, SockContext *context, uint32_t desIP32, uint32_t srcIP32, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize, int window){
+//refactor needed
+void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, SockContext *context, uint32_t desIP32, uint32_t srcIP32, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize, int window, int offset){
 	packet->writeData(14+12,&srcIP32,4);
 	packet->writeData(14+16,&desIP32,4);
 
 	uint8_t *tcpSegment = new uint8_t[datasize+20];
 
 	if(internalbuffer!=NULL){
+		int realoffset;
 		InternalBuffer *intbuffer =(InternalBuffer*) internalbuffer;
-		packet->writeData(54,intbuffer->buffer+intbuffer->nextseqnum,datasize);
+		// if(offset!=-1){
+		// 	realoffset=intbuffer->nextseqnum-512;
+		// 	printf("real offset is %d\n",realoffset);
+		// }
+		//else{
+		realoffset=intbuffer->nextseqnum;
 		intbuffer->nextseqnum+=datasize;
+		//}
+		packet->writeData(54,intbuffer->buffer+realoffset,datasize);
+		
 	}
 	
 	tcpHeader->srcPort=htons(srcPort);
@@ -140,7 +150,7 @@ void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, SockContext 
 		printf("timerkey of close is %d\n",timerkey);
 		payload->timerkey=timerkey;
 	}
-	else if(flags!=ACK) {
+	else if(flags!=ACK || datasize!=0) {
 		Payload *payload = new Payload();
 		payload->packet=this->clonePacket(packet);
 		payload->sendPacket=true;
@@ -156,17 +166,23 @@ void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, SockContext 
 
 		UUID timerkey = TimerModule::addTimer(payload,TimeUtil::makeTime(100,TimeUtil::MSEC));
 		printf("timerkey in send is %d\n",timerkey);
-		printf("flag is %d\n",flags);
+		printf("send seqnum is %d\n",seqnum);
+		// printf("flag is %d\n",flags);
 		payload->timerkey=timerkey;
 
 		//context->timerkey=timerkey;
 		payload->context=context;
 
 		timerlist.insert(std::pair<UUID,SockContext>(timerkey,*context));
+
+		if(flags==ACK && datasize!=0){
+			payloadlist.insert(std::pair<int,Payload>(seqnum,*payload));
+			context->writeflag=1;
+		}
 	}
-	else{
-		printf("send ack with flag %d\n",flags);
-	}
+	// else{
+	// 	//printf("send ack with flag %d\n",flags);
+	// }
 
 	this->sendPacket("IPv4",packet);
 }
@@ -199,7 +215,7 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
 		Packet* newPacket= this->allocatePacket(54);
 
 		Header *tcpHeader = new Header();
-		sendTCPPacket(newPacket,tcpHeader,context,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,FIN+ACK,NULL,0,51200);
+		sendTCPPacket(newPacket,tcpHeader,context,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,FIN+ACK,NULL,0,51200,-1);
 
 		//passive close
 		if(context->state==CLOSE_WAIT){
@@ -251,6 +267,9 @@ void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, cons
 	int sendcount;
 	uint32_t desIP32,srcIP32;
 	uint16_t desPort,srcPort;
+
+	if(intbuffer->remain<=0)
+		return;
 	
 	if(nextseq+count>51200){
 		int part1count=51200-nextseq;
@@ -279,7 +298,7 @@ void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, cons
 			desPort=context->desPort;
 			srcPort=context->srcPort;
 
-			sendTCPPacket(myPacket,tcpHeader,context,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,ACK,intbuffer,sendcount,51200);
+			sendTCPPacket(myPacket,tcpHeader,context,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,ACK,intbuffer,sendcount,51200,-1);
 			context->seqnum+=sendcount;
 			tempcount-=sendcount;
 		}
@@ -305,7 +324,7 @@ void TCPAssignment:: syscall_write(UUID syscallUUID, int pid, int sockfd, const 
 	SockContext *context = &(mapfindbypid(pid,sockfd)->second);
 	InternalBuffer *intbuffer =&(context->intbuffer);
 	
-	if(intbuffer->remain!=0){
+	if(intbuffer->remain>0){
 		writeDataPacket(syscallUUID,context,buf,count);
 	}
 	else{
@@ -365,7 +384,7 @@ void TCPAssignment:: syscall_connect(UUID syscallUUID, int pid, int sockfd, stru
 
 	context->state=SYNSENT;
 
-	sendTCPPacket(newPacket,tcpHeader,context, desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,SYN,NULL,0,51200);
+	sendTCPPacket(newPacket,tcpHeader,context, desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,SYN,NULL,0,51200,-1);
 
 	context->syscallID=syscallUUID;
 
@@ -489,7 +508,7 @@ void TCPAssignment::syscall_getpeername(UUID syscallUUID, int pid, int sockfd, s
 	this->returnSystemCall(syscallUUID,0);
 }
 
-std::map<UUID,SockContext> TCPAssignment::getTimerbyContext(uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort){
+std::map<UUID,SockContext> TCPAssignment::getTimerbyContext(uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort, int seqtofind){
 	auto it=timerlist.begin();
 	std::map<UUID,SockContext> resultlist;
 	while(it!=timerlist.end()){
@@ -497,9 +516,16 @@ std::map<UUID,SockContext> TCPAssignment::getTimerbyContext(uint32_t desIP, uint
 		uint16_t desPortcmp = it->second.desPort;
 		uint32_t srcIPcmp = it->second.srcIP;
 		uint16_t srcPortcmp = it->second.srcPort;
+		int seqnum=it->second.seqnum;
 
 		if(desIP==desIPcmp&&desPort==desPortcmp&&srcIP==srcIPcmp&&srcPort==srcPortcmp){
-			resultlist.insert(std::pair<UUID, SockContext>(it->first,it->second));
+			if(seqtofind==-1)
+				resultlist.insert(std::pair<UUID, SockContext>(it->first,it->second));
+			else{
+				if(seqnum==seqtofind){
+					resultlist.insert(std::pair<UUID, SockContext>(it->first,it->second));
+				}
+			}
 		}
 		it++;
 	}
@@ -572,7 +598,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		}
 
 		//if(context->timerkey!=-1){
-			auto resultlist= getTimerbyContext(context->desIP,context->srcIP,context->desPort,context->srcPort);
+			auto resultlist= getTimerbyContext(context->desIP,context->srcIP,context->desPort,context->srcPort,-1);
 			auto it2= resultlist.begin();
 			while(it2!=resultlist.end()){
 				int expectstate = it2->second.state;
@@ -598,7 +624,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		//state change
 		context->state=ESTAB;
 
-		sendTCPPacket(myPacket,tcpHeader,context,srcIP32,desIP32,srcPort,desPort,acknum,seqnum+1,ACK,NULL,0,51200);
+		sendTCPPacket(myPacket,tcpHeader,context,srcIP32,desIP32,srcPort,desPort,acknum,seqnum+1,ACK,NULL,0,51200,-1);
 
 		this->freePacket(packet);
 
@@ -658,13 +684,12 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		desIP32=htonl(desIP32);
 		srcIP32=htonl(srcIP32);
 
-		sendTCPPacket(myPacket,tcpHeader,dupcontext,srcIP32,desIP32,srcPort,desPort,0,seqnum+1,ACK+SYN,NULL,0,51200);
+		sendTCPPacket(myPacket,tcpHeader,dupcontext,srcIP32,desIP32,srcPort,desPort,0,seqnum+1,ACK+SYN,NULL,0,51200,-1);
 		this->freePacket(packet);	
 	}
 
 	
 	else if(flags==ACK){
-		printf("ack enter\n");
 		int listensockfd=-1;
 		SockContext *liscontext;
 		int simultsockfd=-1;
@@ -678,7 +703,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			uint16_t srcPortcmp=it->second.srcPort;
 			uint32_t srcIPcmp=it->second.srcIP;
 			int statecmp=it->second.state;
-			printf("state cmp is %d\n",statecmp);
+			// printf("state cmp is %d\n",statecmp);
 			if(srcPort==desPortcmp&&srcIP32==desIPcmp){
 				sockfd=it->first;
 				context=&(it->second);
@@ -697,20 +722,118 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		}
 
 
-		// if(sockfd==-1){
-		// 	return;
-		// }
+		if(sockfd==-1){
+			return;
+		}
 
-		if(sockfd!=-1){
-			auto resultlist= getTimerbyContext(context->desIP,context->srcIP,context->desPort,context->srcPort);
-			printf("resultlist size in ack recv should be 1 and it is %d\n",resultlist.size());
-			printf("timerkey in ack recv is %d\n",resultlist.begin()->first);
+
+		printf("recv recvack is %d\n",acknum);
+		int seqtofind;
+		//write case
+		if(acknum!=1&&context->writeflag==1){
+			if(acknum==131074){
+				printf("end!1\n");
+				acknum+=511;
+			}
+			InternalBuffer *intbuffer=&context->intbuffer;
+			seqtofind=intbuffer->recentack;
+			int datasize=acknum-(intbuffer->recentack);
+
+			if(datasize==512){
+				context->dup_recvflag=0;
+			}
+
+			//cumulative ack - ack before ones
+			while(datasize>512){
+				printf("seqtofind is %d\n",seqtofind);
+				printf("cumulativecase datasize is %d!!!!!!\n",datasize);
+				//auto cumullist=getTimerbyContext(context->desIP,context->srcIP,context->desPort,context->srcPort,seqtofind);
+				auto cumullist = payloadlist.find(seqtofind);
+				Payload *cumulcontext=&cumullist->second;
+				printf("cumultimer is %d\n",cumulcontext->timerkey);
+				TimerModule::cancelTimer(cumulcontext->timerkey);
+				timerlist.erase(cumulcontext->timerkey);
+				payloadlist.erase(seqtofind);
+
+				datasize-=512;
+				seqtofind+=512;
+				memset(intbuffer->buffer+intbuffer->base,0,512);
+				intbuffer->remain+=512;
+				intbuffer->base+=512;
+				if(intbuffer->base>=51200){
+					intbuffer->base-=51200;
+				}
+			}
+			//assert(datasize==0||datasize==512);
+			memset(intbuffer->buffer+intbuffer->base,0,datasize);
+			intbuffer->recentack=acknum;
+			intbuffer->remain+=datasize;
+			intbuffer->base+=datasize;
+			if(intbuffer->base>=51200){
+				intbuffer->base-=51200;
+			}
+
+			if(datasize==0){
+				//need retransmit
+				if(context->dup_recvflag==0){
+					context->fast_retransmit++;
+					if(context->fast_retransmit==2){
+						for(int i=0;i<3;i++){
+						//int i=0;
+							//auto seqfindlist=getTimerbyContext(context->desIP,context->srcIP,context->desPort,context->srcPort,acknum+i*512);
+							//assert(seqfindlist.size()!=0);
+							//printf("seqfindlist size %d\n",seqfindlist);
+							//SockContext retransmitcxt=seqfindlist.begin()->second;
+							auto payloadseq =payloadlist.find(acknum+i*512);
+							Payload *paycontext = &payloadseq->second;
+							assert(paycontext->sendPacket==1);
+						
+							TimerModule::cancelTimer(paycontext->timerkey);
+							timerlist.erase(paycontext->timerkey);
+							printf("timerkey is %d\n",paycontext->timerkey);
+							//printf("context base is????????? %d\n",context->intbuffer.base);
+						
+							
+
+							Packet *packet = paycontext->packet;
+							paycontext->packet=this->clonePacket(packet);
+	
+							UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime(100,TimeUtil::MSEC));
+							timerlist.insert(std::pair<UUID,SockContext>(timerkey,*paycontext->context));
+							paycontext->timerkey=timerkey;  
+							printf("newtimer is %d\n",timerkey);
+
+							payloadlist.erase(acknum+i*512);
+							payloadlist.insert(std::pair<int,Payload>(acknum+i*512,*paycontext));
+
+							this->sendPacket("IPv4",paycontext->packet);
+						}
+						context->dup_recvflag=1;
+						//context->fast_retransmit=0;
+						return;
+					}
+					return;
+				}
+				else{
+					return;
+				}
+			}
+			auto resultlist=payloadlist.find(seqtofind);
+			Payload *payloadresult= &resultlist->second;
+			printf("cancel timer timerkey normal case %d\n",payloadresult->timerkey);
+			//auto resultlist= getTimerbyContext(context->desIP,context->srcIP,context->desPort,context->srcPort,seqtofind);
+			TimerModule::cancelTimer(payloadresult->timerkey);
+			timerlist.erase(payloadresult->timerkey);
+		}
+		else{
+			auto resultlist= getTimerbyContext(context->desIP,context->srcIP,context->desPort,context->srcPort,-1);
 			TimerModule::cancelTimer(resultlist.begin()->first);
 			timerlist.erase(resultlist.begin()->first);
+		}
 
 		if(context->state==FIN_WAIT1){
 			//exclude transfer finack before ack case (early case)
-			if(context->seqnum+1==acknum)
+			//if(context->seqnum+1==acknum)
 				context->state=FIN_WAIT2;
 			return;
 		}
@@ -766,23 +889,23 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 					Header *tcpHeader= new Header();
 
-					sendTCPPacket(newPacket,tcpHeader,context,srcIP32,desIP32,srcPort,desPort,context->seqnum,context->acknum,ACK,NULL,0,intbuffer->remain);
+					sendTCPPacket(newPacket,tcpHeader,context,srcIP32,desIP32,srcPort,desPort,context->seqnum,context->acknum,ACK,NULL,0,intbuffer->remain,-1);
 					this->freePacket(packet);
 					return;
 				}
 				//write ack
 				else{
-					int datasize=acknum-(intbuffer->recentack);
-					intbuffer->recentack=acknum;
-					intbuffer->remain+=datasize;
-					intbuffer->base+=datasize;
+					// int datasize=acknum-(intbuffer->recentack);
+					// memset(intbuffer->buffer+intbuffer->base,0,datasize);
+					// intbuffer->recentack=acknum;
+					// intbuffer->remain+=datasize;
+					// intbuffer->base+=datasize;
 					if(iobuffer->count!=-1){
 						writeDataPacket(context->syscallID,context,iobuffer->buffer,iobuffer->count);
 						return;
 					}
 				}
 			}
-		}
 		}
 
 		if(listensockfd==-1){
@@ -897,7 +1020,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		desIP32=htonl(desIP32);
 		srcIP32=htonl(srcIP32);
 
-		sendTCPPacket(myPacket,tcpHeader,sockcontext,srcIP32,desIP32,srcPort,desPort,resseq,resack,ACK,NULL,0,51200);
+		sendTCPPacket(myPacket,tcpHeader,sockcontext,srcIP32,desIP32,srcPort,desPort,resseq,resack,ACK,NULL,0,51200,-1);
 		this->freePacket(packet);
 		
 		// if(sockcontext->state!=CLOSE_WAIT){
@@ -927,7 +1050,7 @@ void TCPAssignment::timerCallback(void* payload)
 
 	TimerModule::cancelTimer(paycontext->timerkey);
 	timerlist.erase(paycontext->timerkey);
-	//printf("timerkey %d cancelled\n",paycontext->timerkey);
+	printf("timerkey %d cancelled\n",paycontext->timerkey);
 
 	if(paycontext->sendPacket==true){
 		Packet *packet = paycontext->packet;
@@ -935,8 +1058,10 @@ void TCPAssignment::timerCallback(void* payload)
 		//printf("packet size is %d\n",packet->getSize());
 		packet->readData(30+4,tcpHeader,20);
 		//printf("reading?\n");
-		uint16_t desPort= ntohs(tcpHeader->desPort);
-		uint8_t flag=tcpHeader->flags;
+		uint32_t seqnum= ntohl(tcpHeader->seqnum);
+		printf("seqnum of retrans in timer return@@@@@@@ %d\n",seqnum);
+		// uint16_t desPort= ntohs(tcpHeader->desPort);
+		// uint8_t flag=tcpHeader->flags;
 		//printf("desport is %d\n",desPort);
 		//printf("flag is %d\n",flag);
 
@@ -944,7 +1069,11 @@ void TCPAssignment::timerCallback(void* payload)
 		UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime(100,TimeUtil::MSEC));
 		timerlist.insert(std::pair<UUID,SockContext>(timerkey,*paycontext->context));
 		paycontext->timerkey=timerkey;  
-		//printf("timer is %d\n",timerkey);
+		if(paycontext->context->writeflag==1){
+			printf("timer is %d\n",timerkey);
+			payloadlist.erase(seqnum);
+			payloadlist.insert(std::pair<int,Payload>(seqnum,*paycontext));
+		}
 		//SockContext *context=paycontext->context;  //disappear
 		//context->timerkey=timerkey;  //disappear
 
