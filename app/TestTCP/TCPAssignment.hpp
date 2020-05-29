@@ -32,6 +32,13 @@ public:
 	int base;
 	int nextseqnum;
 	int recentack;
+	int recentseq;
+	int bufferedseq;
+	int filled;
+	int retransmitted;
+	int packetsize;
+	int doubledropremain;
+	int doubledropseq;
 
 public:
 	InternalBuffer(){
@@ -40,6 +47,13 @@ public:
 		base=0;
 		nextseqnum=0;
 		recentack=1;
+		recentseq=INT32_MIN;
+		bufferedseq=-886;
+		filled=0;
+		retransmitted=0;
+		packetsize=0;
+		doubledropremain=51200;
+		doubledropseq=0;
 	}
 };
 
@@ -71,9 +85,8 @@ public:
 	class IOBuffer iobuffer;
 	int fast_retransmit;
 	bool dup_recvflag;
+	int out_orderflag;
 	int writeflag;
-	//std::map<int,Payload *> packetlist;
-	//UUID timerkey; //disappear
 
 public:
 	SockContext(){
@@ -86,8 +99,8 @@ public:
 		acknum=0;
 		fast_retransmit=0;
 		dup_recvflag=0;
+		out_orderflag=0;
 		writeflag=0;
-		//timerkey=-1;
 	}
 };
 
@@ -156,7 +169,7 @@ public:
 	std::multimap<int, SockContext>::iterator mapfindbypid(int pid, int fd);
 	void sendTCPPacket(Packet *newPacket,Header *tcpHeader, SockContext *context, uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize, int window, int offset);
 	void writeDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count);
-	void readDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count);
+	void readDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count, bool retransmit_flag);
 	std::map<UUID, SockContext> getTimerbyContext(uint32_t desIP, uint32_t srcIP, uint16_t desPort, uint16_t srcPort,int seqtofind);
 	void syscall_socket(UUID syscallUUID, int pid, int type, int protocol);
 	void syscall_close(UUID syscallUUID, int pid, int fd);
