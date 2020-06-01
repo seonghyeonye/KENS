@@ -104,26 +104,16 @@ std::map<int, SockContext>::iterator TCPAssignment::mapfindbypid(int pid, int fd
 	//return;
 }
 
-//refactor needed
-void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, SockContext *context, uint32_t desIP32, uint32_t srcIP32, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize, int window, int offset){
+void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, SockContext *context, uint32_t desIP32, uint32_t srcIP32, uint16_t desPort, uint16_t srcPort, uint32_t seqnum, uint32_t acknum, uint8_t flags, void* internalbuffer, int datasize, int window){
 	packet->writeData(14+12,&srcIP32,4);
 	packet->writeData(14+16,&desIP32,4);
 
 	uint8_t *tcpSegment = new uint8_t[datasize+20];
 
 	if(internalbuffer!=NULL){
-		int realoffset;
 		InternalBuffer *intbuffer =(InternalBuffer*) internalbuffer;
-		// if(offset!=-1){
-		// 	realoffset=intbuffer->nextseqnum-512;
-		// 	printf("real offset is %d\n",realoffset);
-		// }
-		//else{
-		realoffset=intbuffer->nextseqnum;
+		packet->writeData(54,intbuffer->buffer+intbuffer->nextseqnum,datasize);
 		intbuffer->nextseqnum+=datasize;
-		//}
-		packet->writeData(54,intbuffer->buffer+realoffset,datasize);
-		
 	}
 	
 	tcpHeader->srcPort=htons(srcPort);
@@ -149,32 +139,23 @@ void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, SockContext 
 		UUID timerkey=TimerModule::addTimer(payload,TimeUtil::makeTime(120,TimeUtil::SEC));
 		payload->timerkey=timerkey;
 	}
-	else if(flags!=ACK || datasize!=0) {
+	else if(flags==ACK && datasize!=0) {
 		Payload *payload = new Payload();
 		payload->packet=this->clonePacket(packet);
 		payload->sendPacket=true;
 
-		//simultaneous case -send synack before recv synack
-		if(flags==SYN+ACK&&timerlist.size()==1){
-			if(timerlist.begin()->second.state==SYNSENT){
-				TimerModule::cancelTimer(timerlist.begin()->first);
-				timerlist.erase(timerlist.begin()->first);
-			}
-		}
-
 		UUID timerkey = TimerModule::addTimer(payload,TimeUtil::makeTime(100,TimeUtil::MSEC));
+		printf("timerkey in send ack is %d\n",timerkey);
 		payload->timerkey=timerkey;
 
 		payload->context=context;
 
 		timerlist.insert(std::pair<UUID,SockContext>(timerkey,*context));
 
-		if(flags==ACK && datasize!=0){
-			payloadlist.insert(std::pair<int,Payload>(seqnum,*payload));
-			context->writeflag=1;
-		}
-	}
+		payloadlist.insert(std::pair<int,Payload>(seqnum,*payload));
+		context->writeflag=1;
 
+	}
 	this->sendPacket("IPv4",packet);
 }
 
@@ -206,7 +187,7 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
 		Packet* newPacket= this->allocatePacket(54);
 
 		Header *tcpHeader = new Header();
-		sendTCPPacket(newPacket,tcpHeader,context,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,FIN+ACK,NULL,0,51200,-1);
+		sendTCPPacket(newPacket,tcpHeader,context,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,FIN+ACK,NULL,0,51200);
 
 		//passive close
 		if(context->state==CLOSE_WAIT){
@@ -224,90 +205,31 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
 	this->returnSystemCall(syscallUUID,0);
 }
 
-void TCPAssignment::readDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count, bool retransmit_flag){
+void TCPAssignment::readDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count){
 	InternalBuffer *intbuffer =&(context->intbuffer);
 	if(intbuffer->remain<=0){
 		return;
 	}
+	int base = intbuffer->base;
 	uint32_t desIP32,srcIP32;
 	uint16_t desPort,srcPort;
-	int offset=0;
-	int initialcount=count;
-	int tempcount;
-	int initialdrop=intbuffer->doubledropremain;
 
-	if(initialdrop+initialcount>51200){
-		count=51200-initialdrop;
-		initialcount=count;
-	}
-
-	if(intbuffer->retransmitted!=0){
-		if(intbuffer->filled!=0){
-			int filled=intbuffer->filled;
-			memcpy((void *)buf, intbuffer->buffer+intbuffer->base,filled);
-			memset(intbuffer->buffer+intbuffer->base,0,filled);
-			intbuffer->remain+=filled;
-			intbuffer->doubledropremain+=filled;
-			intbuffer->base+=filled;
-			count-=filled;
-			offset+=filled;
-			intbuffer->filled=0;
-		}
-
-		if(intbuffer->nextseqnum==0){
-			intbuffer->nextseqnum=51200;
-		}
-		if(count>=512){
-			tempcount=512;
-		}
-		else{
-			tempcount=count;
-		}
-		int packetsize=intbuffer->packetsize;
-		int lastbuff_off=packetsize-intbuffer->retransmitted;
-
-		if(lastbuff_off+tempcount>packetsize){
-			int leftover=packetsize-lastbuff_off;
-			memcpy((void *)buf+offset, intbuffer->buffer+intbuffer->nextseqnum-packetsize+lastbuff_off,leftover);
-			memcpy((void *)buf+offset+leftover,intbuffer->buffer+intbuffer->base,tempcount-leftover);
-			memset(intbuffer->buffer+intbuffer->nextseqnum-packetsize+lastbuff_off,0,leftover);
-			memset(intbuffer->buffer+intbuffer->base,0,tempcount-leftover);
-			intbuffer->base+=tempcount-leftover;
-			intbuffer->retransmitted=0;
-		}
-		else{
-			memcpy((void *)buf+offset, intbuffer->buffer+intbuffer->nextseqnum-packetsize+lastbuff_off,tempcount);
-			memset(intbuffer->buffer+intbuffer->nextseqnum-packetsize+lastbuff_off,0,tempcount);
-			intbuffer->retransmitted-=tempcount;
-		}
-		count-=tempcount;
-		offset+=tempcount;
-		intbuffer->remain+=tempcount;
-		intbuffer->doubledropremain+=tempcount;
-		if(intbuffer->retransmitted==0){
-			intbuffer->nextseqnum-=packetsize;
-		}
-	}
-
-	int base= intbuffer->base;
 	if(base+count>51200){
 		int limitleft=51200-base;
-		memcpy((void *)buf+offset, intbuffer->buffer+base,limitleft);
-		memcpy((void *)buf+limitleft+offset,intbuffer->buffer,count-limitleft);
+		memcpy((void *)buf, intbuffer->buffer+base,limitleft);
+		memcpy((void *)buf+limitleft,intbuffer->buffer,count-limitleft);
 		memset(intbuffer->buffer+base,0,limitleft);
 		memset(intbuffer->buffer,0,count-limitleft);
 	}
 	else{
-		memcpy((void *)buf+offset,intbuffer->buffer+base,count);
+		memcpy((void *)buf,intbuffer->buffer+base,count);
 		memset(intbuffer->buffer+base,0,count);
 	}
 	intbuffer->base+=count;
 	intbuffer->base%=51200;
 	intbuffer->remain+=count;
-	intbuffer->doubledropremain+=count;
 
-
-	this->returnSystemCall(syscallUUID,initialcount);
+	this->returnSystemCall(syscallUUID,count);
 
 }
 void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, const void *buf, size_t count){
@@ -318,8 +240,9 @@ void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, cons
 	uint32_t desIP32,srcIP32;
 	uint16_t desPort,srcPort;
 
-	if(intbuffer->remain<=0)
+	if(intbuffer->remain<=0){
 		return;
+	}
 	
 	if(nextseq+count>51200){
 		int part1count=51200-nextseq;
@@ -332,6 +255,7 @@ void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, cons
 		memcpy(intbuffer->buffer+nextseq,buf,count);
 	}
 	intbuffer->remain-=count;
+	// printf("after remain is ^^^^^^^^^^^^^%d\n",intbuffer->remain);
 	this->returnSystemCall(syscallUUID,count);
 	if(context->intbuffer.peerremain!=0){
 		while(tempcount>0){
@@ -348,7 +272,7 @@ void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, cons
 			desPort=context->desPort;
 			srcPort=context->srcPort;
 
-			sendTCPPacket(myPacket,tcpHeader,context,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,ACK,intbuffer,sendcount,51200,-1);
+			sendTCPPacket(myPacket,tcpHeader,context, desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,ACK,intbuffer,sendcount,51200);
 			context->seqnum+=sendcount;
 			tempcount-=sendcount;
 		}
@@ -358,8 +282,7 @@ void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, cons
 void TCPAssignment:: syscall_read(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count){
 	SockContext *context = &(mapfindbypid(pid,sockfd)->second);
 	InternalBuffer *intbuffer =&(context->intbuffer);
-	// assert(intbuffer->remain<=51200);
-	if(intbuffer->remain==51200||intbuffer->doubledropremain>=51200){
+	if(intbuffer->remain==51200){
 		context->syscallID=syscallUUID;
 		context->iobuffer.buffer=buf;
 		context->iobuffer.count=count;
@@ -367,21 +290,32 @@ void TCPAssignment:: syscall_read(UUID syscallUUID, int pid, int sockfd, const v
 	else{
 		if((intbuffer->base+count)>(intbuffer->nextseqnum)&&(intbuffer->nextseqnum)>(intbuffer->base))
 			count=intbuffer->nextseqnum-intbuffer->base;
-		readDataPacket(syscallUUID,context,buf,count,0);
+		readDataPacket(syscallUUID,context,buf,count);
 	}
 }
 
 void TCPAssignment:: syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count){
 	SockContext *context = &(mapfindbypid(pid,sockfd)->second);
 	InternalBuffer *intbuffer =&(context->intbuffer);
-	
-	if(intbuffer->remain>0){
-		writeDataPacket(syscallUUID,context,buf,count);
-	}
-	else{
+	// printf("intbuffer->remain is %d\n",intbuffer->remain);
+	// printf("intbufffer->acailsend is %d\n",intbuffer->availsend);
+
+	if(intbuffer->remain<=0||intbuffer->availsend<=0){
+		printf("wait\n");
 		context->syscallID=syscallUUID;
 		context->iobuffer.buffer=buf;
 		context->iobuffer.count=count;
+	}
+	else if(intbuffer->remain==512||intbuffer->availsend==512){
+		printf("first case\n");
+		writeDataPacket(syscallUUID,context,buf,512);
+		if(intbuffer->availsend==512)
+			intbuffer->availsend-=512;
+	}
+	else{
+		printf("not wait\n");
+		intbuffer->availsend-=count;
+		writeDataPacket(syscallUUID,context,buf,count);
 	}
 }
 
@@ -433,10 +367,8 @@ void TCPAssignment:: syscall_connect(UUID syscallUUID, int pid, int sockfd, stru
 
 	Header *tcpHeader = new Header();
 
+	sendTCPPacket(newPacket,tcpHeader,context,desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,SYN,NULL,0,51200);
 	context->state=SYNSENT;
-
-	sendTCPPacket(newPacket,tcpHeader,context, desIP32,srcIP32,desPort,srcPort,context->seqnum,context->acknum,SYN,NULL,0,51200,-1);
-
 	context->syscallID=syscallUUID;
 
 	context->intbuffer= *(new InternalBuffer());
@@ -592,7 +524,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	uint16_t srcPort;
 	uint16_t desPort;
 	uint8_t flags;
-	int seqnum;
+	uint32_t seqnum;
 	uint32_t acknum;
 	uint16_t window;
 	int sockfd=-1;
@@ -617,16 +549,12 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	uint8_t *tcpSegment = new uint8_t[packet->getSize()-34];
 	packet->readData(30+4,tcpSegment,packet->getSize()-34);
 
-	//printf("packet arrive?\n");
-
 	uint16_t checksum=(~NetworkUtil::tcp_sum(htonl(srcIP32), htonl(desIP32), tcpSegment, packet->getSize()-34));
-	//assert(checksum==0);
-	if(checksum!=0){
-		return;
-	}
+	assert(checksum==0);
 
 	//client case connect
 	if(flags==SYN+ACK){
+		// printf("synack enter\n");
 		auto it=addrfdlist.begin();
 		while(it!=addrfdlist.end()){
 			uint32_t srcIPcmp = it->second.srcIP;
@@ -646,15 +574,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			return;
 		}
 
-		auto resultlist= getTimerbyContext(context->desIP,context->srcIP,context->desPort,context->srcPort,-1);
-		auto it2= resultlist.begin();
-		while(it2!=resultlist.end()){
-			int expectstate = it2->second.state;
-				TimerModule::cancelTimer(it2->first);
-				timerlist.erase(it2->first);
-			it2++;
-		}
-
 		context->seqnum=acknum;
 		context->acknum=seqnum+1;
 		context->intbuffer.peerremain=window;
@@ -664,11 +583,10 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		desIP32=htonl(desIP32);
 		srcIP32=htonl(srcIP32);
 
+		sendTCPPacket(myPacket,tcpHeader,context,srcIP32,desIP32,srcPort,desPort,acknum,seqnum+1,ACK,NULL,0,51200);
+
 		//state change
 		context->state=ESTAB;
-
-		sendTCPPacket(myPacket,tcpHeader,context,srcIP32,desIP32,srcPort,desPort,acknum,seqnum+1,ACK,NULL,0,51200,-1);
-
 		this->freePacket(packet);
 
 		this->returnSystemCall(context->syscallID,0);
@@ -694,7 +612,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		if(context->state!=LISTENS&&context->state!=SYNSENT){
 			return;
 		}
-
 
 		int dupsock=createFileDescriptor(context->pid);
 
@@ -723,7 +640,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		desIP32=htonl(desIP32);
 		srcIP32=htonl(srcIP32);
 
-		sendTCPPacket(myPacket,tcpHeader,dupcontext,srcIP32,desIP32,srcPort,desPort,0,seqnum+1,ACK+SYN,NULL,0,51200,-1);
+		sendTCPPacket(myPacket,tcpHeader,dupcontext,srcIP32,desIP32,srcPort,desPort,0,seqnum+1,ACK+SYN,NULL,0,51200);
 		this->freePacket(packet);	
 	}
 
@@ -731,8 +648,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	else if(flags==ACK){
 		int listensockfd=-1;
 		SockContext *liscontext;
-		int simultsockfd=-1;
-		SockContext *simultcontext;
 
 		auto it=addrfdlist.begin();
 		
@@ -745,20 +660,15 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			if(srcPort==desPortcmp&&srcIP32==desIPcmp){
 				sockfd=it->first;
 				context=&(it->second);
-				if(statecmp==FIN_WAIT1)
-					break;
 			}
-			if(desPort==srcPortcmp){
-				if(statecmp==LISTENS||statecmp==SYNSENT){
-					if(desIP32==srcIPcmp||srcIPcmp==0){
-						listensockfd=it->first;
-						liscontext=&(it->second);
-					}
+			else if(desPort==srcPortcmp&&statecmp==LISTENS){
+				if(desIP32==srcIPcmp||srcIPcmp==0){
+					listensockfd=it->first;
+					liscontext=&(it->second);
 				}
 			}
 			it++;
 		}
-
 
 		if(sockfd==-1){
 			return;
@@ -776,6 +686,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			int datasize=acknum-(intbuffer->recentack);
 
 			if(datasize==512){
+				if(context->dup_recvflag==1){
+					intbuffer->cwnd=intbuffer->ssthresh;
+				}
 				context->dup_recvflag=0;
 			}
 
@@ -828,6 +741,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 							payloadlist.erase(acknum+i*512);
 							payloadlist.insert(std::pair<int,Payload>(acknum+i*512,*paycontext));
 
+							intbuffer->ssthresh=(intbuffer->cwnd)/2;
+							intbuffer->cwnd=intbuffer->ssthresh+3*MSS;
+
 							this->sendPacket("IPv4",paycontext->packet);
 						}
 						context->dup_recvflag=1;
@@ -841,20 +757,37 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			}
 			auto resultlist=payloadlist.find(seqtofind);
 			Payload *payloadresult= &resultlist->second;
+			// printf("recv ack %d cancelled\n",payloadresult->timerkey);
 			TimerModule::cancelTimer(payloadresult->timerkey);
 			timerlist.erase(payloadresult->timerkey);
-		}
-		else{
-			auto resultlist= getTimerbyContext(context->desIP,context->srcIP,context->desPort,context->srcPort,-1);
-			if(resultlist.size()!=0){
-				TimerModule::cancelTimer(resultlist.begin()->first);
-				timerlist.erase(resultlist.begin()->first);
-			}
+			//congestion avoidance 
+			// if(intbuffer->cwnd>=intbuffer->ssthresh){
+			// 	intbuffer->congestavoid+=1;
+			// 	//printf("intbuffer congest avoid is %d\n",intbuffer->congestavoid);
+			// 	// intbuffer->cwnd+=MSS*((float)MSS/intbuffer->cwnd);
+			// 	//printf("cwnd after is %d\n",intbuffer->cwnd);
+			// 	if(intbuffer->congestavoid==(intbuffer->cwnd/MSS)){
+			// 		//printf("all came\n");
+			// 		intbuffer->cwnd+=MSS;
+			// 		intbuffer->availsend=1024;
+			// 		intbuffer->congestavoid=0;
+			// 	}
+			// 	else{
+			// 		intbuffer->availsend=512;
+			// 	}
+			// }
+			//slow start
+			//else{
+				intbuffer->cwnd+=512;
+				//printf("availsend before is %d\n",intbuffer->availsend);
+				intbuffer->availsend=1024;
+				//printf("cwnd is %d\n",intbuffer->cwnd);
+			//}
 		}
 
 		if(context->state==FIN_WAIT1){
 			//exclude transfer finack before ack case (early case)
-			//if(context->seqnum+1==acknum)
+			if(context->seqnum+1==acknum)
 				context->state=FIN_WAIT2;
 			return;
 		}
@@ -871,104 +804,36 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		}
 
 		if(context->state==ESTAB){
+			if(context->state!=ESTAB)
+				return;
 			if(window!=0){
 				InternalBuffer *intbuffer=&context->intbuffer;
 				IOBuffer *iobuffer=&context->iobuffer;
 
+				if(intbuffer->remain<=0){
+						return;
+				}
+
 				//read ack
 				if(acknum==1){
-					if(intbuffer->remain<=0){
-						return;
-					}
 					int datasize=packet->getSize()-54;
-					intbuffer->packetsize=datasize;
-					int retransmit_flag=0;
-					if(datasize==0){
-						return;
-					}
-					if(intbuffer->recentseq==INT32_MIN){
-						intbuffer->recentseq=seqnum-datasize;
-					}
-
-					//if equal the previous ack was dropped - send ack again without buffering
-					if(seqnum!=intbuffer->recentseq){
 					
-						if(seqnum<(intbuffer->recentseq)){
-							return;
-						}
+					if(datasize+intbuffer->nextseqnum>51200){
+						int limitleft=51200-intbuffer->nextseqnum;
+						packet->readData(54,intbuffer->buffer+intbuffer->nextseqnum,limitleft);
+						packet->readData(54+limitleft,intbuffer->buffer,datasize-limitleft);
+					}
+					else{
+						packet->readData(54,intbuffer->buffer+intbuffer->nextseqnum,datasize);
+					}
+					intbuffer->remain-=datasize;
+					intbuffer->nextseqnum+=datasize;
+					intbuffer->nextseqnum%=51200;
 
-						if(seqnum-intbuffer->recentseq>datasize){
-							if(intbuffer->remain!=51200&&context->out_orderflag==0){
-								intbuffer->filled=51200-intbuffer->remain;
-							}
-							// //loss same packet again  normal case: seqnum-intbuffer->bufferedseq=512
-							// if((int)seqnum<intbuffer->bufferedseq){
-							// 	printf("lost same packet again!\n");
-							// 	return;
-							// }
-							//again loss
-							if(seqnum-intbuffer->bufferedseq>datasize&&context->out_orderflag>=1){
-								if(seqnum-intbuffer->doubledropseq>datasize&&context->out_orderflag>=2){
-									context->out_orderflag=3;
-								}
-								else{
-									context->out_orderflag=2;
-									intbuffer->doubledropseq=seqnum;
-								}
-							}
-							else{
-								context->out_orderflag=1;
-								intbuffer->bufferedseq=seqnum;
-							}
-						}
-						else{
-							if(context->out_orderflag>=1){
-								//retransmit
-								context->out_orderflag--;
-								//all resolved
-								if(context->out_orderflag==0){
-									intbuffer->doubledropremain=intbuffer->remain;
-									if(intbuffer->doubledropseq!=0){
-										intbuffer->bufferedseq=intbuffer->doubledropseq;
-									}
-								}
-								intbuffer->retransmitted=packet->getSize()-54;
-								retransmit_flag=1;
-								intbuffer->recentseq=intbuffer->bufferedseq;
-							}
-							else{
-								intbuffer->bufferedseq=seqnum;
-								intbuffer->recentseq=seqnum;
-							}
-						}
-
-						if(datasize+intbuffer->nextseqnum>51200){
-							int limitleft=51200-intbuffer->nextseqnum;
-							packet->readData(54,intbuffer->buffer+intbuffer->nextseqnum,limitleft);
-							packet->readData(54+limitleft,intbuffer->buffer,datasize-limitleft);
-						}
-						else{
-							packet->readData(54,intbuffer->buffer+intbuffer->nextseqnum,datasize);
-						}
-						intbuffer->remain-=datasize;
-						intbuffer->nextseqnum+=datasize;
-						intbuffer->nextseqnum%=51200;
-						if(context->out_orderflag<=1){
-							intbuffer->doubledropremain-=datasize;
-						}
-
-						int filled=51200-intbuffer->remain;
-						if(iobuffer->count!=-1&&(context->out_orderflag==0||retransmit_flag==1)){
-							if(filled>=iobuffer->count){
-								readDataPacket(context->syscallID,context,iobuffer->buffer,iobuffer->count,retransmit_flag);
-							}
-						}
-
-						if(context->out_orderflag==0||retransmit_flag==1){
-							if(retransmit_flag==1){
-								context->acknum=intbuffer->bufferedseq;
-							}
-							context->acknum+=datasize;
+					int filled=51200-intbuffer->remain;
+					if(iobuffer->count!=-1){
+						if(filled>=iobuffer->count){
+							readDataPacket(context->syscallID,context,iobuffer->buffer,iobuffer->count);
 						}
 					}
 
@@ -977,24 +842,38 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 					desIP32=htonl(desIP32);
 					srcIP32=htonl(srcIP32);
 
+					context->acknum+=datasize;
+
 					Header *tcpHeader= new Header();
-					sendTCPPacket(newPacket,tcpHeader,context,srcIP32,desIP32,srcPort,desPort,context->seqnum,context->acknum,ACK,NULL,0,intbuffer->remain,-1);
+
+					sendTCPPacket(newPacket,tcpHeader,context,srcIP32,desIP32,srcPort,desPort,context->seqnum,context->acknum,ACK,NULL,0,intbuffer->remain);
 					this->freePacket(packet);
 					return;
 				}
 				//write ack
 				else{
 					if(iobuffer->count!=-1){
-						writeDataPacket(context->syscallID,context,iobuffer->buffer,iobuffer->count);
+						assert(intbuffer->availsend>0);
+						int writebyte;
+						if(intbuffer->remain<iobuffer->count){
+							writebyte=intbuffer->remain;
+						}
+						else{
+							writebyte=iobuffer->count;
+						}
+						//printf("intbuffer availsend in ack recv is %d\n",intbuffer->availsend);
+						// printf("write num in ack recv %d\n",iobuffer->count);
+						assert(intbuffer->availsend>=iobuffer->count);
+						intbuffer->availsend-=writebyte;
+						writeDataPacket(context->syscallID,context,iobuffer->buffer,writebyte);
 						return;
 					}
 				}
 			}
 		}
 
-		if(listensockfd==-1){
+		if(listensockfd==-1)
 			return;
-		}
 
 		if(context->state!=SYNRCVD)
 			return;
@@ -1006,11 +885,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		context->state=ESTAB;
 		context->intbuffer.peerremain=window;
 		this->freePacket(packet);
-		
-		if(liscontext->state==SYNSENT){
-			this->returnSystemCall(liscontext->syscallID,0);
-			return;
-		}
 
 		//case when accept was first called
 		if(liscontext->syscallID!=-1){
@@ -1056,16 +930,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		if(sockfd==-1)
 			return;
 
-		if(sockcontext->out_orderflag>=1){
-			return;
-		}
-
 		IOBuffer *iobuffer=&sockcontext->iobuffer;
 		if(iobuffer->count!=-1&&acknum==1){
 			this->returnSystemCall(sockcontext->syscallID,-1);
 		}
 
-		//passive close
 		if(sockcontext->state==ESTAB){
 			sockcontext->seqnum=acknum;
 			sockcontext->acknum=seqnum+1;
@@ -1074,18 +943,10 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		else if(sockcontext->state==FIN_WAIT1){
 			sockcontext->seqnum=acknum+1;
 			sockcontext->acknum=seqnum+1;
-			//sockcontext->state=TIMED_WAIT;
 		}
 		//normal case
 		else if(sockcontext->state==FIN_WAIT2){
-			//normal case
-			if(sockcontext->seqnum+1==acknum){
-				sockcontext->seqnum=acknum;
-			}
-			//finack retransmit received
-			else{
-				sockcontext->seqnum=acknum+1;
-			}
+			sockcontext->seqnum=acknum;
 			sockcontext->acknum=seqnum+1;
 			sockcontext->state=TIMED_WAIT;
 		}
@@ -1100,7 +961,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		desIP32=htonl(desIP32);
 		srcIP32=htonl(srcIP32);
 
-		sendTCPPacket(myPacket,tcpHeader,sockcontext,srcIP32,desIP32,srcPort,desPort,resseq,resack,ACK,NULL,0,51200,-1);
+		sendTCPPacket(myPacket,tcpHeader,sockcontext,srcIP32,desIP32,srcPort,desPort,resseq,resack,ACK,NULL,0,51200);
 		this->freePacket(packet);
 	}
 }
@@ -1112,27 +973,35 @@ void TCPAssignment::timerCallback(void* payload)
 	Payload *paycontext= (Payload *)payload;
 
 	TimerModule::cancelTimer(paycontext->timerkey);
-	timerlist.erase(paycontext->timerkey);
+	// printf("timerkey %d cancelled\n",paycontext->timerkey);
 
 	if(paycontext->sendPacket==true){
+		timerlist.erase(paycontext->timerkey);
 		Packet *packet = paycontext->packet;
+		SockContext *sockcontext=paycontext->context;
 		packet->readData(30+4,tcpHeader,20);
 		uint32_t seqnum= ntohl(tcpHeader->seqnum);
+		printf("seqnum of retrans in timer return@@@@@@@ %d\n",seqnum);
 
 		paycontext->packet=this->clonePacket(packet);
 		UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime(100,TimeUtil::MSEC));
 		timerlist.insert(std::pair<UUID,SockContext>(timerkey,*paycontext->context));
 		paycontext->timerkey=timerkey;  
 		if(paycontext->context->writeflag==1){
+			// printf("timer is %d\n",timerkey);
 			payloadlist.erase(seqnum);
 			payloadlist.insert(std::pair<int,Payload>(seqnum,*paycontext));
 		}
+
+		// InternalBuffer *intbuffer=&sockcontext->intbuffer;
+		// intbuffer->ssthresh=intbuffer->cwnd/2;
+		// intbuffer->cwnd=MSS;
 
 		this->sendPacket("IPv4",packet);
 		return;
 	}
 
-	SockContext *context =paycontext->context;
+	SockContext *context = (SockContext*)payload;
 
 	if(context->state!=TIMED_WAIT){
 		return;
