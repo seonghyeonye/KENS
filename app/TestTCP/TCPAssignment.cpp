@@ -301,22 +301,35 @@ void TCPAssignment:: syscall_write(UUID syscallUUID, int pid, int sockfd, const 
 	// printf("intbufffer->acailsend is %d\n",intbuffer->availsend);
 
 	if(intbuffer->remain<=0||intbuffer->availsend<=0){
-		printf("wait\n");
+		//printf("wait\n");
 		context->syscallID=syscallUUID;
 		context->iobuffer.buffer=buf;
 		context->iobuffer.count=count;
 	}
-	else if(intbuffer->remain==512||intbuffer->availsend==512){
-		printf("first case\n");
-		writeDataPacket(syscallUUID,context,buf,512);
-		if(intbuffer->availsend==512)
-			intbuffer->availsend-=512;
-	}
-	else{
-		printf("not wait\n");
+	else if(intbuffer->remain>=count&&intbuffer->availsend>=count){
+		//printf("not wait\n");
 		intbuffer->availsend-=count;
 		writeDataPacket(syscallUUID,context,buf,count);
 	}
+	else{
+		//printf("first case\n");
+		int minval= std::min((int) intbuffer->remain,intbuffer->availsend);
+		writeDataPacket(syscallUUID, context, buf, minval);
+		if(minval==intbuffer->availsend){
+			intbuffer->availsend-=minval;
+		}
+	}
+	// else if(intbuffer->remain==512||intbuffer->availsend==512){
+	// 	printf("first case\n");
+	// 	writeDataPacket(syscallUUID,context,buf,512);
+	// 	if(intbuffer->availsend==512)
+	// 		intbuffer->availsend-=512;
+	// }
+	// else{
+	// 	printf("not wait\n");
+	// 	intbuffer->availsend-=count;
+	// 	writeDataPacket(syscallUUID,context,buf,count);
+	// }
 }
 
 void TCPAssignment:: syscall_connect(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen){
@@ -760,29 +773,36 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			// printf("recv ack %d cancelled\n",payloadresult->timerkey);
 			TimerModule::cancelTimer(payloadresult->timerkey);
 			timerlist.erase(payloadresult->timerkey);
-			//congestion avoidance 
+			// //congestion avoidance 
 			// if(intbuffer->cwnd>=intbuffer->ssthresh){
-			// 	intbuffer->congestavoid+=1;
+			// 	//intbuffer->congestavoid+=1;
+			// 	printf("before cogest avoidance availsend is %d\n",intbuffer->availsend);
+			// 	if(intbuffer->availsend<512){
+			// 		intbuffer->availsend+=512;
+			// 	}
 			// 	//printf("intbuffer congest avoid is %d\n",intbuffer->congestavoid);
-			// 	// intbuffer->cwnd+=MSS*((float)MSS/intbuffer->cwnd);
+			// 	intbuffer->cwnd+=MSS*((float)MSS/intbuffer->cwnd);
 			// 	//printf("cwnd after is %d\n",intbuffer->cwnd);
-			// 	if(intbuffer->congestavoid==(intbuffer->cwnd/MSS)){
-			// 		//printf("all came\n");
-			// 		intbuffer->cwnd+=MSS;
-			// 		intbuffer->availsend=1024;
-			// 		intbuffer->congestavoid=0;
-			// 	}
-			// 	else{
-			// 		intbuffer->availsend=512;
-			// 	}
+			// 	//printf("availsend is %d\n",intbuffer->availsend);
+			// 	intbuffer->availsend+=MSS*((float)MSS/intbuffer->cwnd);
+			// 	printf("after congest avoidance is !! %d\n",intbuffer->availsend);
+			// 	// if(intbuffer->congestavoid==((intbuffer->cwnd)/MSS)){
+			// 	// 	printf("recvied ack is %d\n",acknum);
+			// 	// 	intbuffer->cwnd+=MSS;
+			// 	// 	intbuffer->availsend=1024;
+			// 	// 	intbuffer->congestavoid=0;
+			// 	// }
+			// 	// else{
+			// 	// 	intbuffer->availsend=512;
+			// 	// }
 			// }
-			//slow start
-			//else{
-				intbuffer->cwnd+=512;
-				//printf("availsend before is %d\n",intbuffer->availsend);
-				intbuffer->availsend=1024;
-				//printf("cwnd is %d\n",intbuffer->cwnd);
-			//}
+			// //slow start
+			// else{
+			// 	intbuffer->cwnd+=512;
+			// 	//printf("availsend before is %d\n",intbuffer->availsend);
+			// 	intbuffer->availsend=1024;
+			// 	//printf("cwnd is %d\n",intbuffer->cwnd);
+			// }
 		}
 
 		if(context->state==FIN_WAIT1){
@@ -853,17 +873,50 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				//write ack
 				else{
 					if(iobuffer->count!=-1){
-						assert(intbuffer->availsend>0);
+						//assert(intbuffer->availsend>0);
+						//congestion avoidance 
+						if(intbuffer->cwnd>=intbuffer->ssthresh){
+							intbuffer->congestavoid+=1;
+							//printf("before cogest avoidance availsend is %d\n",intbuffer->availsend);
+							// if(intbuffer->availsend<512){
+							// 	intbuffer->availsend+=512;
+							//}
+							//printf("intbuffer congest avoid is %d\n",intbuffer->congestavoid);
+							// intbuffer->cwnd+=MSS*((float)MSS/intbuffer->cwnd);
+							//intbuffer->availsend+=MSS*((float)MSS/intbuffer->cwnd);
+							//printf("after congest avoidance is !! %d\n",intbuffer->availsend);
+							if(intbuffer->congestavoid>=((intbuffer->cwnd)/MSS)){
+								printf("recvied ack is %d\n",acknum);
+								intbuffer->cwnd+=MSS;
+								intbuffer->availsend=1024;
+								intbuffer->congestavoid=0;
+							}
+							else{
+								intbuffer->availsend=512;
+							}
+						}
+						//slow start
+						else{
+							intbuffer->cwnd+=512;
+							//printf("availsend before is %d\n",intbuffer->availsend);
+							intbuffer->availsend=1024;
+							//printf("cwnd is %d\n",intbuffer->cwnd);
+						}
 						int writebyte;
-						if(intbuffer->remain<iobuffer->count){
-							writebyte=intbuffer->remain;
+						if(intbuffer->remain<iobuffer->count||intbuffer->availsend<iobuffer->count){
+							if(intbuffer->remain<intbuffer->availsend){
+								writebyte=intbuffer->remain;
+							}
+							else{
+								writebyte=intbuffer->availsend;
+							}
 						}
 						else{
 							writebyte=iobuffer->count;
 						}
 						//printf("intbuffer availsend in ack recv is %d\n",intbuffer->availsend);
 						// printf("write num in ack recv %d\n",iobuffer->count);
-						assert(intbuffer->availsend>=iobuffer->count);
+						//assert(intbuffer->availsend>=iobuffer->count);
 						intbuffer->availsend-=writebyte;
 						writeDataPacket(context->syscallID,context,iobuffer->buffer,writebyte);
 						return;
@@ -993,9 +1046,9 @@ void TCPAssignment::timerCallback(void* payload)
 			payloadlist.insert(std::pair<int,Payload>(seqnum,*paycontext));
 		}
 
-		// InternalBuffer *intbuffer=&sockcontext->intbuffer;
-		// intbuffer->ssthresh=intbuffer->cwnd/2;
-		// intbuffer->cwnd=MSS;
+		InternalBuffer *intbuffer=&sockcontext->intbuffer;
+		intbuffer->ssthresh=(intbuffer->cwnd)/2;
+		intbuffer->cwnd=MSS;
 
 		this->sendPacket("IPv4",packet);
 		return;
