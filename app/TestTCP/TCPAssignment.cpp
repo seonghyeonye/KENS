@@ -144,11 +144,16 @@ void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, SockContext 
 		payload->packet=this->clonePacket(packet);
 		payload->sendPacket=true;
 
-		UUID timerkey = TimerModule::addTimer(payload,TimeUtil::makeTime(100,TimeUtil::MSEC));
+		UUID timerkey = TimerModule::addTimer(payload,TimeUtil::makeTime(context->timercal.RTO,TimeUtil::MSEC));
 		printf("timerkey in send ack is %d\n",timerkey);
 		payload->timerkey=timerkey;
 
 		payload->context=context;
+
+		int timer =TimeUtil::getTime(this->getHost()->getSystem()->getCurrentTime(),TimeUtil::MSEC);
+		//printf("time current is %d\n",timer);
+
+		payload->storedtime=timer;
 
 		timerlist.insert(std::pair<UUID,SockContext>(timerkey,*context));
 
@@ -747,7 +752,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 							Packet *packet = paycontext->packet;
 							paycontext->packet=this->clonePacket(packet);
 	
-							UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime(100,TimeUtil::MSEC));
+							UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime(context->timercal.RTO,TimeUtil::MSEC));
 							timerlist.insert(std::pair<UUID,SockContext>(timerkey,*paycontext->context));
 							paycontext->timerkey=timerkey;  
 
@@ -773,36 +778,18 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			// printf("recv ack %d cancelled\n",payloadresult->timerkey);
 			TimerModule::cancelTimer(payloadresult->timerkey);
 			timerlist.erase(payloadresult->timerkey);
-			// //congestion avoidance 
-			// if(intbuffer->cwnd>=intbuffer->ssthresh){
-			// 	//intbuffer->congestavoid+=1;
-			// 	printf("before cogest avoidance availsend is %d\n",intbuffer->availsend);
-			// 	if(intbuffer->availsend<512){
-			// 		intbuffer->availsend+=512;
-			// 	}
-			// 	//printf("intbuffer congest avoid is %d\n",intbuffer->congestavoid);
-			// 	intbuffer->cwnd+=MSS*((float)MSS/intbuffer->cwnd);
-			// 	//printf("cwnd after is %d\n",intbuffer->cwnd);
-			// 	//printf("availsend is %d\n",intbuffer->availsend);
-			// 	intbuffer->availsend+=MSS*((float)MSS/intbuffer->cwnd);
-			// 	printf("after congest avoidance is !! %d\n",intbuffer->availsend);
-			// 	// if(intbuffer->congestavoid==((intbuffer->cwnd)/MSS)){
-			// 	// 	printf("recvied ack is %d\n",acknum);
-			// 	// 	intbuffer->cwnd+=MSS;
-			// 	// 	intbuffer->availsend=1024;
-			// 	// 	intbuffer->congestavoid=0;
-			// 	// }
-			// 	// else{
-			// 	// 	intbuffer->availsend=512;
-			// 	// }
-			// }
-			// //slow start
-			// else{
-			// 	intbuffer->cwnd+=512;
-			// 	//printf("availsend before is %d\n",intbuffer->availsend);
-			// 	intbuffer->availsend=1024;
-			// 	//printf("cwnd is %d\n",intbuffer->cwnd);
-			// }
+			
+			int pasttime = payloadresult->storedtime;
+			int currenttime = TimeUtil::getTime(this->getHost()->getSystem()->getCurrentTime(),TimeUtil::MSEC);
+			printf("msec past is %d\n",currenttime-pasttime);
+			int timepast=currenttime-pasttime;
+
+			TimerCalculate *timeinfo=&context->timercal;
+			timeinfo->RTTVAR=0.75*(timeinfo->RTTVAR)+0.25*abs(timeinfo->SRTT-timepast);
+			timeinfo->SRTT=0.875*(timeinfo->SRTT)+0.25*timepast;
+			timeinfo->RTO=timeinfo->SRTT+4*(timeinfo->RTTVAR);
+			printf("rto is %d\n",timeinfo->RTO);
+
 		}
 
 		if(context->state==FIN_WAIT1){
@@ -1026,7 +1013,6 @@ void TCPAssignment::timerCallback(void* payload)
 	Payload *paycontext= (Payload *)payload;
 
 	TimerModule::cancelTimer(paycontext->timerkey);
-	// printf("timerkey %d cancelled\n",paycontext->timerkey);
 
 	if(paycontext->sendPacket==true){
 		timerlist.erase(paycontext->timerkey);
@@ -1037,7 +1023,7 @@ void TCPAssignment::timerCallback(void* payload)
 		printf("seqnum of retrans in timer return@@@@@@@ %d\n",seqnum);
 
 		paycontext->packet=this->clonePacket(packet);
-		UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime(100,TimeUtil::MSEC));
+		UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime(sockcontext->timercal.RTO,TimeUtil::MSEC));
 		timerlist.insert(std::pair<UUID,SockContext>(timerkey,*paycontext->context));
 		paycontext->timerkey=timerkey;  
 		if(paycontext->context->writeflag==1){

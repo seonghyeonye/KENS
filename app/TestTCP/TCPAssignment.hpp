@@ -77,6 +77,21 @@ public:
 	}
 };
 
+class TimerCalculate
+{
+public:
+	int SRTT;
+	int RTTVAR;
+	int RTO;
+
+public:
+	TimerCalculate(){
+		SRTT=100;
+		RTTVAR=50;
+		RTO=300;
+	}
+};
+
 class SockContext 
 {
 public:
@@ -94,6 +109,7 @@ public:
 	int fast_retransmit;
 	bool dup_recvflag;
 	int writeflag;
+	class TimerCalculate timercal;
 
 public:
 	SockContext(){
@@ -137,6 +153,7 @@ public:
 	class SockContext* context; 
 	bool sendPacket;
 	UUID timerkey;
+	int storedtime;
 };
 
 class TCPAssignment : public HostModule, public NetworkModule, public SystemCallInterface, private NetworkLog, private TimerModule
