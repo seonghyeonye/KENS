@@ -154,6 +154,10 @@ public:
 	bool sendPacket;
 	UUID timerkey;
 	int storedtime;
+public:
+	Payload(){
+		timerkey=-1;
+	}
 };
 
 class TCPAssignment : public HostModule, public NetworkModule, public SystemCallInterface, private NetworkLog, private TimerModule

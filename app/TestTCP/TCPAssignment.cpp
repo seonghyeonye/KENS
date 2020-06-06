@@ -145,13 +145,11 @@ void TCPAssignment::sendTCPPacket(Packet *packet,Header *tcpHeader, SockContext 
 		payload->sendPacket=true;
 
 		UUID timerkey = TimerModule::addTimer(payload,TimeUtil::makeTime(context->timercal.RTO,TimeUtil::MSEC));
-		printf("timerkey in send ack is %d\n",timerkey);
 		payload->timerkey=timerkey;
 
 		payload->context=context;
 
 		int timer =TimeUtil::getTime(this->getHost()->getSystem()->getCurrentTime(),TimeUtil::MSEC);
-		//printf("time current is %d\n",timer);
 
 		payload->storedtime=timer;
 
@@ -260,7 +258,6 @@ void TCPAssignment::writeDataPacket(UUID syscallUUID, SockContext *context, cons
 		memcpy(intbuffer->buffer+nextseq,buf,count);
 	}
 	intbuffer->remain-=count;
-	// printf("after remain is ^^^^^^^^^^^^^%d\n",intbuffer->remain);
 	this->returnSystemCall(syscallUUID,count);
 	if(context->intbuffer.peerremain!=0){
 		while(tempcount>0){
@@ -302,39 +299,23 @@ void TCPAssignment:: syscall_read(UUID syscallUUID, int pid, int sockfd, const v
 void TCPAssignment:: syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count){
 	SockContext *context = &(mapfindbypid(pid,sockfd)->second);
 	InternalBuffer *intbuffer =&(context->intbuffer);
-	// printf("intbuffer->remain is %d\n",intbuffer->remain);
-	// printf("intbufffer->acailsend is %d\n",intbuffer->availsend);
 
 	if(intbuffer->remain<=0||intbuffer->availsend<=0){
-		//printf("wait\n");
 		context->syscallID=syscallUUID;
 		context->iobuffer.buffer=buf;
 		context->iobuffer.count=count;
 	}
 	else if(intbuffer->remain>=count&&intbuffer->availsend>=count){
-		//printf("not wait\n");
 		intbuffer->availsend-=count;
 		writeDataPacket(syscallUUID,context,buf,count);
 	}
 	else{
-		//printf("first case\n");
 		int minval= std::min((int) intbuffer->remain,intbuffer->availsend);
 		writeDataPacket(syscallUUID, context, buf, minval);
 		if(minval==intbuffer->availsend){
 			intbuffer->availsend-=minval;
 		}
 	}
-	// else if(intbuffer->remain==512||intbuffer->availsend==512){
-	// 	printf("first case\n");
-	// 	writeDataPacket(syscallUUID,context,buf,512);
-	// 	if(intbuffer->availsend==512)
-	// 		intbuffer->availsend-=512;
-	// }
-	// else{
-	// 	printf("not wait\n");
-	// 	intbuffer->availsend-=count;
-	// 	writeDataPacket(syscallUUID,context,buf,count);
-	// }
 }
 
 void TCPAssignment:: syscall_connect(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen){
@@ -435,7 +416,6 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct
 			ret->sin_family = AF_INET;
 			ret->sin_addr.s_addr=htonl(dupcontext->srcIP);
 			ret->sin_port=htons(dupcontext->srcPort);
-			//dupcontext->state=ESTAB;
 			this->returnSystemCall(syscallUUID,dupsockfd);
 		}
 
@@ -476,8 +456,6 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int sockfd, struct s
 
 void TCPAssignment::syscall_getsockname(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen){
 	SockContext *context= &mapfindbypid(pid,sockfd)->second;
-	// if(addrinfo.compare("-1")==0)
-	// 	return -1;
 
 	uint32_t ipaddr= context->srcIP;
 	unsigned short int portnum = context->srcPort;
@@ -572,7 +550,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 	//client case connect
 	if(flags==SYN+ACK){
-		// printf("synack enter\n");
 		auto it=addrfdlist.begin();
 		while(it!=addrfdlist.end()){
 			uint32_t srcIPcmp = it->second.srcIP;
@@ -750,11 +727,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 							timerlist.erase(paycontext->timerkey);
 
 							Packet *packet = paycontext->packet;
-							paycontext->packet=this->clonePacket(packet);
+							Packet *cloned=this->clonePacket(packet);
 	
-							UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime(context->timercal.RTO,TimeUtil::MSEC));
-							timerlist.insert(std::pair<UUID,SockContext>(timerkey,*paycontext->context));
+							UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime((context->timercal.RTO)*2,TimeUtil::MSEC));
 							paycontext->timerkey=timerkey;  
+							timerlist.insert(std::pair<UUID,SockContext>(timerkey,*paycontext->context));
 
 							payloadlist.erase(acknum+i*512);
 							payloadlist.insert(std::pair<int,Payload>(acknum+i*512,*paycontext));
@@ -762,7 +739,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 							intbuffer->ssthresh=(intbuffer->cwnd)/2;
 							intbuffer->cwnd=intbuffer->ssthresh+3*MSS;
 
-							this->sendPacket("IPv4",paycontext->packet);
+							this->sendPacket("IPv4",cloned);
+							paycontext->packet=this->clonePacket(packet);
 						}
 						context->dup_recvflag=1;
 						return;
@@ -775,20 +753,17 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			}
 			auto resultlist=payloadlist.find(seqtofind);
 			Payload *payloadresult= &resultlist->second;
-			// printf("recv ack %d cancelled\n",payloadresult->timerkey);
 			TimerModule::cancelTimer(payloadresult->timerkey);
 			timerlist.erase(payloadresult->timerkey);
 			
 			int pasttime = payloadresult->storedtime;
 			int currenttime = TimeUtil::getTime(this->getHost()->getSystem()->getCurrentTime(),TimeUtil::MSEC);
-			printf("msec past is %d\n",currenttime-pasttime);
 			int timepast=currenttime-pasttime;
 
 			TimerCalculate *timeinfo=&context->timercal;
 			timeinfo->RTTVAR=0.75*(timeinfo->RTTVAR)+0.25*abs(timeinfo->SRTT-timepast);
 			timeinfo->SRTT=0.875*(timeinfo->SRTT)+0.25*timepast;
 			timeinfo->RTO=timeinfo->SRTT+4*(timeinfo->RTTVAR);
-			printf("rto is %d\n",timeinfo->RTO);
 
 		}
 
@@ -860,20 +835,10 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				//write ack
 				else{
 					if(iobuffer->count!=-1){
-						//assert(intbuffer->availsend>0);
 						//congestion avoidance 
 						if(intbuffer->cwnd>=intbuffer->ssthresh){
 							intbuffer->congestavoid+=1;
-							//printf("before cogest avoidance availsend is %d\n",intbuffer->availsend);
-							// if(intbuffer->availsend<512){
-							// 	intbuffer->availsend+=512;
-							//}
-							//printf("intbuffer congest avoid is %d\n",intbuffer->congestavoid);
-							// intbuffer->cwnd+=MSS*((float)MSS/intbuffer->cwnd);
-							//intbuffer->availsend+=MSS*((float)MSS/intbuffer->cwnd);
-							//printf("after congest avoidance is !! %d\n",intbuffer->availsend);
 							if(intbuffer->congestavoid>=((intbuffer->cwnd)/MSS)){
-								printf("recvied ack is %d\n",acknum);
 								intbuffer->cwnd+=MSS;
 								intbuffer->availsend=1024;
 								intbuffer->congestavoid=0;
@@ -885,9 +850,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						//slow start
 						else{
 							intbuffer->cwnd+=512;
-							//printf("availsend before is %d\n",intbuffer->availsend);
 							intbuffer->availsend=1024;
-							//printf("cwnd is %d\n",intbuffer->cwnd);
 						}
 						int writebyte;
 						if(intbuffer->remain<iobuffer->count||intbuffer->availsend<iobuffer->count){
@@ -901,9 +864,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						else{
 							writebyte=iobuffer->count;
 						}
-						//printf("intbuffer availsend in ack recv is %d\n",intbuffer->availsend);
-						// printf("write num in ack recv %d\n",iobuffer->count);
-						//assert(intbuffer->availsend>=iobuffer->count);
 						intbuffer->availsend-=writebyte;
 						writeDataPacket(context->syscallID,context,iobuffer->buffer,writebyte);
 						return;
@@ -1012,6 +972,10 @@ void TCPAssignment::timerCallback(void* payload)
 
 	Payload *paycontext= (Payload *)payload;
 
+	if(paycontext==NULL){
+		return;
+	}
+
 	TimerModule::cancelTimer(paycontext->timerkey);
 
 	if(paycontext->sendPacket==true){
@@ -1020,14 +984,12 @@ void TCPAssignment::timerCallback(void* payload)
 		SockContext *sockcontext=paycontext->context;
 		packet->readData(30+4,tcpHeader,20);
 		uint32_t seqnum= ntohl(tcpHeader->seqnum);
-		printf("seqnum of retrans in timer return@@@@@@@ %d\n",seqnum);
 
 		paycontext->packet=this->clonePacket(packet);
-		UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime(sockcontext->timercal.RTO,TimeUtil::MSEC));
+		UUID timerkey=TimerModule::addTimer(paycontext,TimeUtil::makeTime((sockcontext->timercal.RTO)*2,TimeUtil::MSEC));
 		timerlist.insert(std::pair<UUID,SockContext>(timerkey,*paycontext->context));
 		paycontext->timerkey=timerkey;  
 		if(paycontext->context->writeflag==1){
-			// printf("timer is %d\n",timerkey);
 			payloadlist.erase(seqnum);
 			payloadlist.insert(std::pair<int,Payload>(seqnum,*paycontext));
 		}
